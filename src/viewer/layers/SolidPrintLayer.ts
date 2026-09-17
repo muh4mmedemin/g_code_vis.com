@@ -126,6 +126,13 @@ export class SolidPrintLayer implements SceneLayer {
       tmpMid.addVectors(tmpFrom, tmpTo).multiplyScalar(0.5);
 
       const height = layerHeights[move.layerIndex] ?? SOLID_LAYER_HEIGHT_FALLBACK;
+      // Kutu, G-code Z'sini (bu katmanin UST yuzeyi) tepe noktasi kabul edip
+      // asagi dogru "height" kadar uzanmali — boylece ilk katman tam
+      // tabladan (Z=0) baslar ve komsu katmanlar ozel bir durum gerekmeden
+      // birebir bitisir. Merkezi tmpMid'den tmpUp boyunca yarim yukseklik
+      // asagi kaydirmak bunu saglar (ust yuz aynen tmpMid'de kalir).
+      tmpMid.addScaledVector(tmpUp, -height / 2);
+
       tmpScale.set(length, SOLID_EXTRUSION_WIDTH, height);
 
       tmpMatrix.compose(tmpMid, tmpQuat, tmpScale);
