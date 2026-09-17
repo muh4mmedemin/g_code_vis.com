@@ -1,4 +1,7 @@
+import type { StateCreator } from 'zustand';
 import type { ParseResult } from '@/core/types';
+import { parseInWorker } from '@/gcode/worker/client';
+import type { AppStore } from '../store';
 
 /** Yuklenen dosya + editordeki metin + parse sonucu. */
 export interface DocumentSlice {
@@ -17,4 +20,73 @@ export interface DocumentSlice {
   closeDocument(): void;
 }
 
-/** TODO(sonnet): createDocumentSlice implementasyonu. */
+let activeParse: { cancel: () => void } | null = null;
+
+export const createDocumentSlice: StateCreator<AppStore, [], [], DocumentSlice> = (
+  set,
+  get,
+) => ({
+  fileName: null,
+  source: '',
+  parseResult: null,
+  parseStatus: 'idle',
+  parseProgress: 0,
+  parseError: null,
+
+  async loadFile(file) {
+    const text = await file.text();
+    set({ fileName: file.name, source: text });
+    await get().reparse();
+  },
+
+  setSource(source) {
+    set({ source });
+  },
+
+  async reparse() {
+    activeParse?.cancel();
+
+    const source = get().source;
+    if (source.trim().length === 0) {
+      set({ parseResult: null, parseStatus: 'idle', parseProgress: 0, parseError: null });
+      return;
+    }
+
+    set({ parseStatus: 'parsing', parseProgress: 0, parseError: null });
+
+    const handle = parseInWorker(source, (ratio) => {
+      set({ parseProgress: ratio });
+    });
+    activeParse = handle;
+
+    try {
+      const result = await handle.promise;
+      set({
+        parseResult: result,
+        parseStatus: 'ready',
+        parseProgress: 1,
+        // Varsayilan: tum katmanlar ve tum hareketler gorunur (tam toolpath).
+        visibleLayer: Math.max(0, result.layers.length - 1),
+        minVisibleLayer: 0,
+        moveCursor: result.moves.length,
+      });
+    } catch (err) {
+      set({
+        parseStatus: 'error',
+        parseError: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+
+  closeDocument() {
+    activeParse?.cancel();
+    set({
+      fileName: null,
+      source: '',
+      parseResult: null,
+      parseStatus: 'idle',
+      parseProgress: 0,
+      parseError: null,
+    });
+  },
+});

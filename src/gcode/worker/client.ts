@@ -1,18 +1,62 @@
 import type { ParseResult } from '@/core/types';
+import type { WorkerRequest, WorkerResponse } from './protocol';
 
 /**
  * Worker'i saran, Promise tabanli istemci. UI katmani yalnizca bunu gorur;
  * ilerde worker'siz (senkron) bir yola donmek istenirse tek dosya degisir.
- * TODO(sonnet): Worker yasam dongusu, id eslestirme, iptal (cancel) destegi.
  */
 export interface ParseHandle {
   promise: Promise<ParseResult>;
   cancel(): void;
 }
 
+let requestCounter = 0;
+
 export function parseInWorker(
-  _source: string,
-  _onProgress?: (ratio: number) => void,
+  source: string,
+  onProgress?: (ratio: number) => void,
 ): ParseHandle {
-  throw new Error('NOT_IMPLEMENTED: parseInWorker');
+  const worker = new Worker(new URL('./parser.worker.ts', import.meta.url), { type: 'module' });
+  const id = ++requestCounter;
+  let settled = false;
+
+  const promise = new Promise<ParseResult>((resolve, reject) => {
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const msg = event.data;
+      if (msg.id !== id) return;
+
+      if (msg.type === 'progress') {
+        onProgress?.(msg.ratio);
+        return;
+      }
+
+      settled = true;
+      if (msg.type === 'done') {
+        resolve(msg.result);
+      } else {
+        reject(new Error(msg.message));
+      }
+      worker.terminate();
+    };
+
+    worker.onerror = (event) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(event.message || 'Worker hatasi'));
+      worker.terminate();
+    };
+
+    const request: WorkerRequest = { type: 'parse', id, source };
+    worker.postMessage(request);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (!settled) {
+        settled = true;
+        worker.terminate();
+      }
+    },
+  };
 }

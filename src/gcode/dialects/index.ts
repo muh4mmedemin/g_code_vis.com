@@ -7,6 +7,10 @@
  *   Simplify3D   -> "; layer 12, Z = 0.4"
  *   Bambu Studio -> "; CHANGE_LAYER" / "; Z_HEIGHT: 0.4"
  * CNC dosyalarinda katman kavrami yoktur; Z degisimi ile turetilir.
+ *
+ * Faz 1'de katman sinirlari dogrudan Z degisiminden cikariliyor (bkz.
+ * gcode/parser/commands.ts), bu yuzden dialect tespiti henuz zorunlu degil.
+ * Bu dosya Faz 5'te slicer'a ozel yorum ayristirma icin genisletilecek.
  */
 export interface Dialect {
   name: string;
@@ -16,13 +20,11 @@ export interface Dialect {
   parseLayerHint(comment: string): { layerIndex?: number; z?: number } | null;
 }
 
-export const DIALECTS: Dialect[] = [
-  // TODO(sonnet): cura.ts, prusa.ts, simplify3d.ts, bambu.ts, generic.ts
-];
+export const DIALECTS: Dialect[] = [];
 
 /** Hicbiri eslesmezse kullanilacak fallback (sadece Z degisimine bakar). */
 export const GENERIC_DIALECT_NAME = 'generic';
 
-export function detectDialect(_headLines: string[]): Dialect | null {
-  throw new Error('NOT_IMPLEMENTED: detectDialect');
+export function detectDialect(headLines: string[]): Dialect | null {
+  return DIALECTS.find((d) => d.detect(headLines)) ?? null;
 }

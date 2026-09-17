@@ -1,3 +1,6 @@
+import type { StateCreator } from 'zustand';
+import type { AppStore } from '../store';
+
 /**
  * Editor <-> 3D cift yonlu secim koprusu.
  * Editorde satira tiklaninca 3D'de ilgili segment vurgulanir; 3D'de bir
@@ -13,4 +16,15 @@ export interface SelectionSlice {
   selectMove(moveIndex: number | null): void;
 }
 
-/** TODO(sonnet): createSelectionSlice implementasyonu. */
+export const createSelectionSlice: StateCreator<AppStore, [], [], SelectionSlice> = (set) => ({
+  selectedLine: null,
+  hoveredMove: null,
+
+  selectLine(lineIndex) {
+    set({ selectedLine: lineIndex });
+  },
+
+  selectMove(moveIndex) {
+    set({ hoveredMove: moveIndex });
+  },
+});
