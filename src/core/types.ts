@@ -168,6 +168,9 @@ export interface ToolDefinition {
 
 export type ColorMode = 'kind' | 'layer' | 'feedrate' | 'tool';
 
+/** Toolpath'in nasil cizilecegi: ince cizgiler mi, dolgun/yuzeyli 3D mi. */
+export type RenderMode = 'lines' | 'solid';
+
 export interface ViewSettings {
   colorMode: ColorMode;
   showTravel: boolean;
@@ -176,4 +179,5 @@ export interface ViewSettings {
   showAxes: boolean;
   /** Tek katman izole modu. */
   isolateLayer: boolean;
+  renderMode: RenderMode;
 }

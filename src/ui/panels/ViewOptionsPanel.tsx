@@ -8,6 +8,25 @@ export function ViewOptionsPanel() {
 
   return (
     <div className="panel panel--view-options">
+      <div className="view-options__row view-options__row--segmented">
+        <span>Gorunum:</span>
+        <div className="segmented">
+          <button
+            type="button"
+            className={view.renderMode === 'lines' ? 'segmented__btn is-active' : 'segmented__btn'}
+            onClick={() => setView({ renderMode: 'lines' })}
+          >
+            Cizgi
+          </button>
+          <button
+            type="button"
+            className={view.renderMode === 'solid' ? 'segmented__btn is-active' : 'segmented__btn'}
+            onClick={() => setView({ renderMode: 'solid' })}
+          >
+            Yuzey
+          </button>
+        </div>
+      </div>
       <label className="view-options__row">
         <input
           type="checkbox"

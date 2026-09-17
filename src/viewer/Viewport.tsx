@@ -3,6 +3,7 @@ import { SceneManager } from './core/SceneManager';
 import { GridLayer } from './layers/GridLayer';
 import { BuildVolumeLayer } from './layers/BuildVolumeLayer';
 import { ToolpathLayer } from './layers/ToolpathLayer';
+import { SolidPrintLayer } from './layers/SolidPrintLayer';
 import { ToolHeadLayer } from './layers/ToolHeadLayer';
 import { useStore } from '@/state/store';
 
@@ -31,12 +32,14 @@ export function Viewport() {
     const gridLayer = new GridLayer(buildVolume);
     const buildVolumeLayer = new BuildVolumeLayer(buildVolume);
     const toolpathLayer = new ToolpathLayer();
+    const solidPrintLayer = new SolidPrintLayer();
     const toolHeadLayer = new ToolHeadLayer();
     toolpathLayer.onFrameRequested = (min, max) => manager.frameBounds(min, max);
 
     manager.addLayer(gridLayer);
     manager.addLayer(buildVolumeLayer);
     manager.addLayer(toolpathLayer);
+    manager.addLayer(solidPrintLayer);
     manager.addLayer(toolHeadLayer);
 
     // store -> SceneManager: tek yonlu kopru. Sadece ilgili dilim degistiginde tetiklenir.

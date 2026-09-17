@@ -94,6 +94,7 @@ export class ToolpathLayer implements SceneLayer {
   private lines: THREE.LineSegments | null = null;
   private material: THREE.ShaderMaterial | null = null;
   private layerCount = 0;
+  private linesVisible = true;
 
   init(ctx: LayerContext): void {
     this.ctx = ctx;
@@ -145,6 +146,7 @@ export class ToolpathLayer implements SceneLayer {
     });
 
     this.lines = new THREE.LineSegments(geometry, this.material);
+    this.lines.visible = this.linesVisible;
     this.ctx?.scene.add(this.lines);
 
     const { bounds } = data.stats;
@@ -164,6 +166,8 @@ export class ToolpathLayer implements SceneLayer {
     null;
 
   onViewSettings(settings: ViewSettings): void {
+    this.linesVisible = settings.renderMode !== 'solid';
+    if (this.lines) this.lines.visible = this.linesVisible;
     if (!this.material) return;
     this.material.uniforms.uShowTravel!.value = settings.showTravel ? 1 : 0;
     this.material.uniforms.uColorMode!.value = settings.colorMode === 'layer' ? 1 : 0;
