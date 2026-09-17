@@ -2,11 +2,12 @@ import { useStore } from '@/state/store';
 
 /** Dikey katman slider'i (Faz 2): "1..N katmani goster" + izole mod anahtari. */
 export function LayerSlider() {
-  const layers = useStore((s) => s.parseResult?.layers ?? []);
+  const parseResult = useStore((s) => s.parseResult);
+  const layers = parseResult?.layers;
   const visibleLayer = useStore((s) => s.visibleLayer);
   const setVisibleLayer = useStore((s) => s.setVisibleLayer);
 
-  if (layers.length === 0) return null;
+  if (!layers || layers.length === 0) return null;
 
   const activeLayer = layers[visibleLayer];
 
