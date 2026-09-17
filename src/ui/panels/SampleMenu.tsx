@@ -19,6 +19,11 @@ const SAMPLES: SampleEntry[] = [
     file: 'vazo-spiral.gcode',
   },
   {
+    label: 'Dolu kup',
+    description: '%100 dolgulu, kenarlari tam dolu katiki kup',
+    file: 'dolu-kup.gcode',
+  },
+  {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',
