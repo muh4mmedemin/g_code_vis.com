@@ -1,4 +1,5 @@
 import { FileDropZone } from './FileDropZone';
+import { SampleMenu } from './SampleMenu';
 import { useStore } from '@/state/store';
 
 /** Ust serit: dosya ac, Print/CNC mod secici, kamera preset'leri. */
@@ -10,6 +11,7 @@ export function Toolbar() {
     <header className="toolbar">
       <strong className="toolbar__title">G-code Visualizer</strong>
       <FileDropZone />
+      <SampleMenu />
       <div className="toolbar__spacer" />
       <div className="mode-switch" role="tablist" aria-label="Makine modu">
         <button

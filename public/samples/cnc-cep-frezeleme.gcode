@@ -1,0 +1,40 @@
+; Ornek: CNC cep (pocket) frezeleme
+; 60x40mm stok, 40x20mm cep, 3 derinlik gecisi (Z: -2/-4/-6mm)
+; Not: E degerleri gercek CNC'de anlamsizdir, sadece bu gorsellestiricide
+; kesim gecislerini (travel'dan ayri) renklendirmek icin eklenmistir.
+G90
+M82
+G28
+G0 Z5
+G0 X10 Y10
+G1 Z-2 F300
+G1 X50 Y10 E1.5 F800
+G1 X50 Y30 E3.0 F800
+G1 X10 Y30 E4.5 F800
+G1 X10 Y10 E6.0 F800
+G0 Z5
+G0 X10 Y10
+G1 Z-4 F300
+G1 X50 Y10 E7.5 F800
+G1 X50 Y30 E9.0 F800
+G1 X10 Y30 E10.5 F800
+G1 X10 Y10 E12.0 F800
+G0 Z5
+G0 X10 Y10
+G1 Z-6 F300
+G1 X50 Y10 E13.5 F800
+G1 X50 Y30 E15.0 F800
+G1 X10 Y30 E16.5 F800
+G1 X10 Y10 E18.0 F800
+G0 Z5
+G0 X14 Y14
+G1 Z-6 F300
+G1 X46 Y14 E19.5 F800
+G1 X46 Y18 E21.0 F800
+G1 X14 Y18 E22.5 F800
+G1 X14 Y22 E24.0 F800
+G1 X46 Y22 E25.5 F800
+G1 X46 Y26 E27.0 F800
+G1 X14 Y26 E28.5 F800
+G0 Z5
+G28
