@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { useStore } from '@/state/store';
+import type { MachineMode } from '@/core/types';
 
 interface SampleEntry {
   label: string;
   description: string;
   file: string;
+  /** Yuklendiginde makine modunu da bu deger otomatik ayarlanir. */
+  mode: MachineMode;
 }
 
 const SAMPLES: SampleEntry[] = [
@@ -12,21 +15,25 @@ const SAMPLES: SampleEntry[] = [
     label: 'Katmanli kare',
     description: '3 katmanli basit FDM baskisi',
     file: 'kare-katmanli.gcode',
+    mode: 'print',
   },
   {
     label: 'Spiral vazo',
     description: 'Surekli yukselen tek cidarli govde',
     file: 'vazo-spiral.gcode',
+    mode: 'print',
   },
   {
     label: 'Dolu kup',
     description: '%100 dolgulu, kenarlari tam dolu katiki kup',
     file: 'dolu-kup.gcode',
+    mode: 'print',
   },
   {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',
+    mode: 'cnc',
   },
 ];
 
@@ -34,6 +41,7 @@ const SAMPLES: SampleEntry[] = [
 export function SampleMenu() {
   const [open, setOpen] = useState(false);
   const loadFile = useStore((s) => s.loadFile);
+  const setMode = useStore((s) => s.setMode);
 
   const handleSelect = async (sample: SampleEntry) => {
     setOpen(false);
@@ -41,6 +49,7 @@ export function SampleMenu() {
     const response = await fetch(url);
     const text = await response.text();
     const file = new File([text], sample.file, { type: 'text/plain' });
+    setMode(sample.mode);
     void loadFile(file);
   };
 

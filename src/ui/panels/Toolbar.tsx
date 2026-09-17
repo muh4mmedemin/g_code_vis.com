@@ -25,8 +25,7 @@ export function Toolbar() {
           type="button"
           className={mode === 'cnc' ? 'mode-switch__btn is-active' : 'mode-switch__btn'}
           onClick={() => setMode('cnc')}
-          title="CNC modu: talas kaldirma simulasyonu (Faz 6, henuz aktif degil)"
-          disabled
+          title="CNC modu: katman yerine sadece takimin izledigi yolu gosterir. Talas kaldirma (voxel oyma) simulasyonu ayri bir asamada gelecek."
         >
           CNC
         </button>
