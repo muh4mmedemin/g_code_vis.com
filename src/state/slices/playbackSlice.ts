@@ -1,3 +1,6 @@
+import type { StateCreator } from 'zustand';
+import type { AppStore } from '../store';
+
 /** Katman slider'i + simulasyon durumu (Faz 2-3). */
 export interface PlaybackSlice {
   isPlaying: boolean;
@@ -19,4 +22,65 @@ export interface PlaybackSlice {
   setSpeed(speed: number): void;
 }
 
-/** TODO(sonnet): createPlaybackSlice + rAF tabanli ilerleme dongusu. */
+/**
+ * Faz 1 kapsaminda katman/simulasyon UI'i henuz baglanmadi; bu slice
+ * durumu tutar ve temel gecisleri saglar. Oynatma dongusu (rAF) ve
+ * zamana gore hareket imleci hesaplamasi Faz 3'te eklenecek.
+ */
+export const createPlaybackSlice: StateCreator<AppStore, [], [], PlaybackSlice> = (
+  set,
+  get,
+) => ({
+  isPlaying: false,
+  speed: 1,
+  visibleLayer: 0,
+  minVisibleLayer: 0,
+  moveCursor: 0,
+
+  play() {
+    set({ isPlaying: true });
+  },
+
+  pause() {
+    set({ isPlaying: false });
+  },
+
+  stepForward(n = 1) {
+    const total = get().parseResult?.moves.length ?? 0;
+    set((state) => ({ moveCursor: Math.min(total, state.moveCursor + n) }));
+  },
+
+  stepBackward(n = 1) {
+    set((state) => ({ moveCursor: Math.max(0, state.moveCursor - n) }));
+  },
+
+  seekToMove(index) {
+    const total = get().parseResult?.moves.length ?? 0;
+    set({ moveCursor: Math.max(0, Math.min(total, index)) });
+  },
+
+  seekToTime(seconds) {
+    const moves = get().parseResult?.moves ?? [];
+    let cursor = moves.length;
+    let elapsed = 0;
+    for (let i = 0; i < moves.length; i++) {
+      const move = moves[i];
+      if (!move) continue;
+      if (elapsed + move.duration > seconds) {
+        cursor = i;
+        break;
+      }
+      elapsed += move.duration;
+    }
+    set({ moveCursor: cursor });
+  },
+
+  setVisibleLayer(index) {
+    const layerCount = get().parseResult?.layers.length ?? 0;
+    set({ visibleLayer: Math.max(0, Math.min(layerCount - 1, index)) });
+  },
+
+  setSpeed(speed) {
+    set({ speed });
+  },
+});

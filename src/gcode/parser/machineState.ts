@@ -1,4 +1,5 @@
 import type { PositioningMode, Unit, Vec3 } from '@/core/types';
+import { MM_PER_INCH } from '@/core/constants';
 
 /**
  * Parser'in modal (kalici) durumu. Her satir bu durumu okur ve/veya gunceller.
@@ -21,6 +22,8 @@ export interface MachineState {
   currentLayer: number;
   /** Aktif katmanin Z degeri. */
   layerZ: number;
+  /** Ilk hareketten once false; ilk katmanin lazy baslatilmasi icin. */
+  hasLayer: boolean;
 }
 
 export function createInitialState(): MachineState {
@@ -35,5 +38,11 @@ export function createInitialState(): MachineState {
     offset: { x: 0, y: 0, z: 0 },
     currentLayer: 0,
     layerZ: 0,
+    hasLayer: false,
   };
+}
+
+/** Girilen deger birim moduna gore mm'ye cevrilir. */
+export function toMillimeters(value: number, unit: Unit): number {
+  return unit === 'inch' ? value * MM_PER_INCH : value;
 }
