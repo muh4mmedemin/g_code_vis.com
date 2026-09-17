@@ -1,5 +1,6 @@
 name: Deploy to GitHub Pages
 
+# Her push'ta projeyi derleyip GitHub Pages'e yayinlar.
 on:
   push:
     branches:
@@ -14,7 +15,7 @@ permissions:
   pages: write
   id-token: write
 
-# Ust uste gelen push'larda yalnizca son deploy tamamlanir.
+# Ust uste gelen push'larda yalnizca en son deploy tamamlanir.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -32,12 +33,10 @@ jobs:
 
       - run: npm ci
 
+      # base yolu vite.config.ts icinde GITHUB_REPOSITORY'den turetilir.
       - run: npm run build
 
-      # enablement: repoda Pages kapali ise Actions kaynagiyla otomatik acar.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
