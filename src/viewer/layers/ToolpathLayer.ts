@@ -6,11 +6,14 @@ import { COLORS } from '@/core/constants';
 const VERTEX_SHADER = /* glsl */ `
   attribute float aKind;
   attribute float aLayer;
+  attribute float aIndex;
   varying float vKind;
   varying float vLayer;
+  varying float vIndex;
   void main() {
     vKind = aKind;
     vLayer = aLayer;
+    vIndex = aIndex;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -19,6 +22,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   precision mediump float;
   varying float vKind;
   varying float vLayer;
+  varying float vIndex;
 
   uniform vec3 uExtrudeColor;
   uniform vec3 uTravelColor;
@@ -29,6 +33,10 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uMaxLayer;
   uniform float uColorMode; // 0 = kind, 1 = layer
   uniform float uLayerCount;
+  // Simulasyon/oynatma icin: bu indeksten sonraki segmentler henuz "islenmemis"
+  // sayilir ve gizlenir (bkz. ToolpathLayer.onProgress). Bosta/tam gorunumde
+  // buffer sayisina esitlenir, hicbir seyi gizlemez.
+  uniform float uMoveCursor;
 
   vec3 rainbow(float t) {
     // basit HSV->RGB (hue = t)
@@ -48,6 +56,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     // kind kodlari: 0 extrude, 1 travel, 2 retract, 3 home (bkz. MOVE_KIND_CODE)
     if (vLayer < uMinLayer - 0.5 || vLayer > uMaxLayer + 0.5) discard;
     if (uShowTravel < 0.5 && (vKind > 0.5 && vKind < 1.5)) discard;
+    if (vIndex > uMoveCursor + 0.5) discard;
 
     vec3 color;
     if (uColorMode > 0.5 && uLayerCount > 0.0) {
@@ -103,6 +112,7 @@ export class ToolpathLayer implements SceneLayer {
     // Segment basina 1 deger olan kind/layer, per-vertex (2 vertex/segment) hale getirilir.
     const vertexKind = new Float32Array(buffers.count * 2);
     const vertexLayer = new Float32Array(buffers.count * 2);
+    const vertexIndex = new Float32Array(buffers.count * 2);
     for (let i = 0; i < buffers.count; i++) {
       const kind = buffers.kinds[i] ?? 0;
       const layer = buffers.layerIndices[i] ?? 0;
@@ -110,9 +120,12 @@ export class ToolpathLayer implements SceneLayer {
       vertexKind[i * 2 + 1] = kind;
       vertexLayer[i * 2] = layer;
       vertexLayer[i * 2 + 1] = layer;
+      vertexIndex[i * 2] = i;
+      vertexIndex[i * 2 + 1] = i;
     }
     geometry.setAttribute('aKind', new THREE.BufferAttribute(vertexKind, 1));
     geometry.setAttribute('aLayer', new THREE.BufferAttribute(vertexLayer, 1));
+    geometry.setAttribute('aIndex', new THREE.BufferAttribute(vertexIndex, 1));
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERTEX_SHADER,
@@ -127,6 +140,7 @@ export class ToolpathLayer implements SceneLayer {
         uMaxLayer: { value: this.layerCount },
         uColorMode: { value: 0 },
         uLayerCount: { value: this.layerCount },
+        uMoveCursor: { value: buffers.count },
       },
     });
 
@@ -163,6 +177,7 @@ export class ToolpathLayer implements SceneLayer {
     if (!this.material) return;
     this.material.uniforms.uMaxLayer!.value = state.visibleLayer;
     this.material.uniforms.uMinLayer!.value = state.minVisibleLayer;
+    this.material.uniforms.uMoveCursor!.value = state.moveCursor;
     this.ctx?.requestRender();
   }
 

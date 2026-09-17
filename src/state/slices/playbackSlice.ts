@@ -23,9 +23,10 @@ export interface PlaybackSlice {
 }
 
 /**
- * Faz 1 kapsaminda katman/simulasyon UI'i henuz baglanmadi; bu slice
- * durumu tutar ve temel gecisleri saglar. Oynatma dongusu (rAF) ve
- * zamana gore hareket imleci hesaplamasi Faz 3'te eklenecek.
+ * Oynatma dongusunun kendisi viewer/Viewport.tsx icindeki tek bir rAF
+ * dongusunde yasar (bkz. o dosyadaki 'tick'); bu slice yalnizca durumu
+ * tutar. play() moveCursor sonda ise basa sarar, boylece "Baslat" her
+ * zaman basindan itibaren adim adim oynatir.
  */
 export const createPlaybackSlice: StateCreator<AppStore, [], [], PlaybackSlice> = (
   set,
@@ -38,7 +39,12 @@ export const createPlaybackSlice: StateCreator<AppStore, [], [], PlaybackSlice> 
   moveCursor: 0,
 
   play() {
-    set({ isPlaying: true });
+    const total = get().parseResult?.moves.length ?? 0;
+    if (total === 0) return;
+    set((state) => ({
+      isPlaying: true,
+      moveCursor: state.moveCursor >= total ? 0 : state.moveCursor,
+    }));
   },
 
   pause() {

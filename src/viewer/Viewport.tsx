@@ -3,7 +3,12 @@ import { SceneManager } from './core/SceneManager';
 import { GridLayer } from './layers/GridLayer';
 import { BuildVolumeLayer } from './layers/BuildVolumeLayer';
 import { ToolpathLayer } from './layers/ToolpathLayer';
+import { ToolHeadLayer } from './layers/ToolHeadLayer';
 import { useStore } from '@/state/store';
+
+/** Bir hareketin animasyon suresi (saniye). Feedrate=0 veya cok kisa
+ * hareketlerde bile goze carpan bir ilerleme olsun diye alt sinir konur. */
+const MIN_MOVE_DURATION = 0.05;
 
 /**
  * SceneManager'i bir DOM konteynerine baglayan ince React kabugu.
@@ -26,11 +31,13 @@ export function Viewport() {
     const gridLayer = new GridLayer(buildVolume);
     const buildVolumeLayer = new BuildVolumeLayer(buildVolume);
     const toolpathLayer = new ToolpathLayer();
+    const toolHeadLayer = new ToolHeadLayer();
     toolpathLayer.onFrameRequested = (min, max) => manager.frameBounds(min, max);
 
     manager.addLayer(gridLayer);
     manager.addLayer(buildVolumeLayer);
     manager.addLayer(toolpathLayer);
+    manager.addLayer(toolHeadLayer);
 
     // store -> SceneManager: tek yonlu kopru. Sadece ilgili dilim degistiginde tetiklenir.
     const unsubData = useStore.subscribe((state, prev) => {
@@ -70,7 +77,41 @@ export function Viewport() {
     // Baslangic durumunu uygula (ilk yuklemede zaten veri varsa).
     manager.broadcastViewSettings(useStore.getState().view);
 
+    // --- Simulasyon/oynatma dongusu (Faz 3) ---------------------------------
+    // isPlaying acikken moveCursor'u gercek zamana gore ilerletir. Store'un
+    // kendisi degil, bu tek rAF dongusu "saat" gorevi gorur; boylece birden
+    // fazla bilesen ayni animasyona farkli hizlarda abone olmaya calismaz.
+    let rafId = requestAnimationFrame(tick);
+    let lastTime = performance.now();
+
+    function tick(now: number) {
+      rafId = requestAnimationFrame(tick);
+      const deltaSeconds = (now - lastTime) / 1000;
+      lastTime = now;
+
+      const state = useStore.getState();
+      if (!state.isPlaying) return;
+
+      const moves = state.parseResult?.moves;
+      if (!moves || moves.length === 0) {
+        useStore.setState({ isPlaying: false });
+        return;
+      }
+
+      const currentIndex = Math.min(Math.floor(state.moveCursor), moves.length - 1);
+      const currentMove = moves[currentIndex];
+      const duration = Math.max(currentMove?.duration ?? 0, MIN_MOVE_DURATION);
+      const nextCursor = state.moveCursor + (deltaSeconds * state.speed) / duration;
+
+      if (nextCursor >= moves.length) {
+        useStore.setState({ moveCursor: moves.length, isPlaying: false });
+      } else {
+        useStore.setState({ moveCursor: nextCursor });
+      }
+    }
+
     return () => {
+      cancelAnimationFrame(rafId);
       unsubData();
       unsubView();
       unsubVolume();
