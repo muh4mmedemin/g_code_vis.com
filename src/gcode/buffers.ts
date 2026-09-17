@@ -12,9 +12,9 @@ export function buildToolpathBuffers(_moves: Move[]): ToolpathBuffers {
 /** postMessage(transfer) icin buffer listesi. */
 export function collectTransferables(buffers: ToolpathBuffers): Transferable[] {
   return [
-    buffers.positions.buffer,
-    buffers.kinds.buffer,
-    buffers.layerIndices.buffer,
-    buffers.timeOffsets.buffer,
+    buffers.positions.buffer as ArrayBuffer,
+    buffers.kinds.buffer as ArrayBuffer,
+    buffers.layerIndices.buffer as ArrayBuffer,
+    buffers.timeOffsets.buffer as ArrayBuffer,
   ];
 }
