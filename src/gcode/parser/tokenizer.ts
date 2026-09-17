@@ -1,19 +1,30 @@
 /**
  * Satir seviyesinde tokenizer.
  *
- * Gorev: ham bir G-code satirini "komut + parametre sozlugu + yorum" uclusune
- * ayirmak. Hicbir semantik yorum yapmaz (modal state bilmez).
+ * Gorev: ham bir G-code satirini "komutlar + parametre sozlugu + yorum"
+ * uclusune ayirmak. Hicbir semantik yorum yapmaz (modal state bilmez).
  *
  * Ornek: "G1 X10.5 Y2 E0.04 ; wall-outer"
- *   -> { command: 'G1', params: { X: 10.5, Y: 2, E: 0.04 }, comment: 'wall-outer' }
+ *   -> { commands: ['G1'], params: { X: 10.5, Y: 2, E: 0.04 }, comment: 'wall-outer' }
  */
 
 export type ParamLetter = 'X' | 'Y' | 'Z' | 'E' | 'F' | 'I' | 'J' | 'K' | 'R' | 'S' | 'P' | 'T';
 
 export interface GcodeToken {
-  /** 'G1', 'M104', 'T0' ... Sadece yorum satirinda null. */
+  /**
+   * Satirdaki TUM G/M/T komut sozcukleri, yazildiklari sirayla.
+   * Tek satirda birden fazla komut yasaldir ve CNC dosyalarinda yaygindir:
+   * "G90 G21 G17", "G0 G90 X10".
+   */
+  commands: string[];
+  /** Kolaylik: ilk komut. Yalnizca komutsuz satirda null. */
   command: string | null;
   params: Partial<Record<ParamLetter, number>>;
+  /**
+   * Sayisiz yazilmis harfler (ornek: "G28 X Y" -> ['X','Y']).
+   * params icinde bunlar 0 olarak da yer alir; ayrimi gerekiyorsa buraya bakilir.
+   */
+  bare: ParamLetter[];
   /** ';' veya '()' icindeki metin, trim'lenmis. Yoksa null. */
   comment: string | null;
   lineIndex: number;
@@ -22,71 +33,117 @@ export interface GcodeToken {
 const PARAM_LETTERS = 'XYZEFIJKRSPT';
 
 /**
+ * Harf + (opsiyonel) sayi ciftleri.
+ * Sayi formatlari: 10, -10, +10, 10.5, .5, -.5, 10.
+ * Sayinin opsiyonel olmasi "G28 X Y" gibi ciplak eksen harflerini yakalar.
+ */
+const WORD_RE = /([A-Z])[ \t]*([-+]?(?:\d+\.?\d*|\.\d+))?/g;
+
+/**
  * Bir satiri tokenize eder.
  *
  * Desteklenenler:
  *  - ';' ile satir sonu yorumlari
- *  - '(' ... ')' ile inline yorumlar (CNC dosyalarinda yaygin)
+ *  - '(' ... ')' ile inline yorumlar (CNC'de yaygin), kapanmamis parantez dahil
+ *  - '%' program sinirlayicisi (CNC) — yok sayilir
  *  - checksum'lu satirlar: "N123 G1 X10 *45" (N.. ve *.. atilir)
  *  - bosluksuz yazim: "G1X10Y20"
+ *  - tek satirda birden fazla komut: "G90 G21", "G0 G90 X10"
  *  - buyuk/kucuk harf karisimi
  */
 export function tokenizeLine(line: string, lineIndex: number): GcodeToken {
-  let comment: string | null = null;
+  const empty = (comment: string | null): GcodeToken => ({
+    commands: [],
+    command: null,
+    params: {},
+    bare: [],
+    comment,
+    lineIndex,
+  });
 
-  // Once parantezli yorumlari cikar (birden fazla olabilir).
+  let comment: string | null = null;
+  const addComment = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    comment = comment ? `${comment} ${trimmed}` : trimmed;
+  };
+
+  // Parantezli yorumlar (birden fazla olabilir).
   let working = line.replace(/\(([^)]*)\)/g, (_match, inner: string) => {
-    comment = comment ? `${comment} ${inner.trim()}` : inner.trim();
+    addComment(inner);
     return ' ';
   });
+
+  // Kapanmamis parantez: acilistan satir sonuna kadarki kisim yorumdur.
+  const openParen = working.indexOf('(');
+  if (openParen >= 0) {
+    addComment(working.slice(openParen + 1));
+    working = working.slice(0, openParen);
+  }
 
   // ';' sonrasi tamami yorumdur.
   const semiIndex = working.indexOf(';');
   if (semiIndex >= 0) {
-    const trailing = working.slice(semiIndex + 1).trim();
-    comment = comment ? `${comment} ${trailing}` : trailing;
+    addComment(working.slice(semiIndex + 1));
     working = working.slice(0, semiIndex);
   }
 
   working = working.trim();
-  if (working.length === 0) {
-    return { command: null, params: {}, comment: comment || null, lineIndex };
-  }
+  if (working.length === 0) return empty(comment);
+
+  // '%' program basi/sonu isareti (CNC): satirda baska bir sey yoksa yok say.
+  if (working === '%') return empty(comment);
 
   // Checksum: "*NN" satir sonunda olur, atilir.
-  working = working.replace(/\*\d+\s*$/, '').trim();
-
+  working = working.replace(/\*\s*\d+\s*$/, '').trim();
   // Satir numarasi: "N123 ..." — komut degil, atilir.
-  working = working.replace(/^N\d+\s*/i, '');
+  working = working.replace(/^N\s*\d+\s*/i, '');
 
   working = working.toUpperCase();
+  if (working.length === 0) return empty(comment);
 
-  // Harf + sayi ciftlerini yakala (bosluksuz da calisir): G1X10.5Y-2
-  const wordRe = /([A-Z])\s*(-?\d+\.?\d*|\.\d+)/g;
-  let command: string | null = null;
+  const commands: string[] = [];
   const params: Partial<Record<ParamLetter, number>> = {};
+  const bare: ParamLetter[] = [];
 
+  WORD_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
-  let first = true;
-  while ((match = wordRe.exec(working)) !== null) {
+  let wordIndex = 0;
+
+  while ((match = WORD_RE.exec(working)) !== null) {
     const letter = match[1];
     const numStr = match[2];
-    if (!letter || numStr === undefined) continue;
-    const value = Number(numStr);
+    if (!letter) continue;
 
-    if (first && (letter === 'G' || letter === 'M' || letter === 'T')) {
-      // G/M/T komut kodu her zaman tam sayi olarak normalize edilir (G1, G01 -> G1),
-      // fakat G0.5 gibi ondalik komut yok, bu yuzden guvenle formatlayabiliriz.
-      command = `${letter}${value}`;
-      first = false;
+    const hasNumber = numStr !== undefined && numStr !== '' && numStr !== '+' && numStr !== '-';
+    const value = hasNumber ? Number(numStr) : 0;
+
+    // G ve M her zaman komuttur. T ise yalnizca satirin ILK sozcuguyse komuttur
+    // ("T0" = takim degisimi); aksi halde parametredir ("M104 S200 T0" -> T
+    // sicaklik komutunun hedef extruder'i, takim degisimi degil).
+    const isCommandWord =
+      hasNumber && (letter === 'G' || letter === 'M' || (letter === 'T' && wordIndex === 0));
+
+    wordIndex++;
+
+    if (isCommandWord) {
+      // G01 -> G1 normalizasyonu; G90.1 gibi ondalikli kodlar korunur.
+      commands.push(`${letter}${value}`);
       continue;
     }
-    first = false;
 
     if (PARAM_LETTERS.includes(letter)) {
       params[letter as ParamLetter] = value;
+      if (!hasNumber) bare.push(letter as ParamLetter);
     }
   }
 
-  return { command, params, comment: comment || null, lineIndex };
+  return {
+    commands,
+    command: commands[0] ?? null,
+    params,
+    bare,
+    comment,
+    lineIndex,
+  };
 }

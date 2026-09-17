@@ -30,6 +30,12 @@ const SAMPLES: SampleEntry[] = [
     mode: 'print',
   },
   {
+    label: 'Yay (G2/G3)',
+    description: 'Yuvarlatilmis kutu, daire ve yukselen helis',
+    file: 'yay-g2g3.gcode',
+    mode: 'print',
+  },
+  {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',

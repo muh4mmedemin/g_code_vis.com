@@ -1,10 +1,12 @@
 import type { GcodeStats, Layer, Move } from '@/core/types';
 
 /**
- * Hareket listesinden istatistik uretir (Faz 4 tam paneli sonra gelecek;
- * bu fonksiyon veri modelinin bir parcasi oldugu icin simdiden dolduruldu).
+ * Hareket listesinden istatistik uretir.
+ *
+ * @param dwellSeconds G4 komutlarindan biriken toplam bekleme suresi; hareket
+ *        surelerine eklenir (aksi halde tahmin sistematik olarak dusuk kalir).
  */
-export function computeStats(moves: Move[], layers: Layer[]): GcodeStats {
+export function computeStats(moves: Move[], layers: Layer[], dwellSeconds = 0): GcodeStats {
   const bounds = {
     min: { x: Infinity, y: Infinity, z: Infinity },
     max: { x: -Infinity, y: -Infinity, z: -Infinity },
@@ -43,7 +45,7 @@ export function computeStats(moves: Move[], layers: Layer[]): GcodeStats {
   return {
     totalMoves: moves.length,
     layerCount: layers.length,
-    estimatedDuration,
+    estimatedDuration: estimatedDuration + dwellSeconds,
     filamentLength,
     distanceExtrude,
     distanceTravel,

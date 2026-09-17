@@ -37,6 +37,7 @@ grep -rn "NOT_IMPLEMENTED\|TODO(sonnet)" src
 
 ## Henuz yapilmayanlar (bilerek)
 
-- Test altyapisi kurulmadi (kullanici kendi test edecek).
+- Test altyapisi: Vitest kurulu (`npm test`). Su an parser (tokenizer +
+  parseGcode) kapsanmis durumda; viewer/UI katmani icin test yok.
 - Bagimliliklar yuklenmedi, build calistirilmadi.
 - ESLint yapilandirmasi eklenmedi (script hazir, config sonra).

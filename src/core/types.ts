@@ -57,6 +57,8 @@ export interface Move {
   f: number;
   /** Hareketin ait oldugu katman indeksi (0-tabanli). */
   layerIndex: number;
+  /** Hareketi yapan takim/extruder indeksi (T komutu). */
+  tool: number;
   /** Segment uzunlugu (mm, XYZ). Istatistik icin parser tarafindan doldurulur. */
   distance: number;
   /** Tahmini sure (saniye). Bkz. gcode/estimator. */
