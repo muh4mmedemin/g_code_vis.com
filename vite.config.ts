@@ -4,10 +4,23 @@ import { fileURLToPath, URL } from 'node:url';
 
 /**
  * GitHub Pages projeyi <kullanici>.github.io/<repo>/ altinda yayinlar, bu
- * yuzden CI'da base yolu repo adi olmali. Yerelde (npm run dev) kok '/' kalir.
- * Ozel bir domain kullanilacaksa BASE_PATH=/ verilerek ezilebilir.
+ * yuzden CI'da base yolu repo adi olmalidir. Repo adi GITHUB_REPOSITORY'den
+ * okunur; boylece repo yeniden adlandirilsa da yapilandirma bozulmaz.
+ *
+ * Istisnalar:
+ *  - yerelde (npm run dev) base '/' kalir
+ *  - <kullanici>.github.io reposu kokten yayinlanir, base '/' olur
+ *  - ozel alan adi (custom domain) kullanilacaksa BASE_PATH=/ verilmelidir
  */
-const base = process.env.BASE_PATH ?? (process.env.GITHUB_ACTIONS ? '/G_CODE-Visualizer/' : '/');
+function resolveBase(): string {
+  if (process.env.BASE_PATH) return process.env.BASE_PATH;
+  const repo = process.env.GITHUB_REPOSITORY?.split('/')[1];
+  if (!repo) return '/';
+  if (repo.endsWith('.github.io')) return '/';
+  return `/${repo}/`;
+}
+
+const base = resolveBase();
 
 export default defineConfig({
   base,
