@@ -1,7 +1,12 @@
 import * as THREE from 'three';
 import type { LayerContext, PlaybackFrame, SceneLayer } from '../core/SceneLayer';
-import type { ParseResult, ViewSettings } from '@/core/types';
-import { COLORS, SOLID_EXTRUSION_WIDTH, SOLID_LAYER_HEIGHT_FALLBACK } from '@/core/constants';
+import type { BoundingBox, Move, ParseResult, ViewSettings } from '@/core/types';
+import {
+  COLORS,
+  LAYER_Z_EPSILON,
+  SOLID_EXTRUSION_WIDTH,
+  SOLID_LAYER_HEIGHT_FALLBACK,
+} from '@/core/constants';
 
 const tmpFrom = new THREE.Vector3();
 const tmpTo = new THREE.Vector3();
@@ -29,6 +34,155 @@ function rainbow(t: number): THREE.Color {
   else if (h < 5) [r, g, b] = [x, 0, 1];
   else [r, g, b] = [1, 0, x];
   return new THREE.Color(r, g, b);
+}
+
+
+/** Bir bead'in makul en buyuk yuksekligi (mm) — hatali tespitlere karsi tavan. */
+const MAX_BEAD_HEIGHT = 5;
+/** Spiral tespitinde taranacak en fazla extrude hareketi (performans siniri). */
+const SPIRAL_SCAN_LIMIT = 20000;
+
+/**
+ * Spiral/vazo modu "pitch"ini (turlar arasi dikey mesafe) tespit eder.
+ *
+ * NEDEN: Surekli yukselen bir spiralde her hareket kendi Z'sinde oldugu icin
+ * katman araligi = hareket basina Z artisi olur (ornegin 0.002mm). Oysa
+ * malzemenin gercek kalinligi, bir UST turdaki gecise kadar olan mesafedir
+ * (pitch). Katman araligi kullanilirsa turlar arasinda buyuk bosluklar kalir
+ * ve "yuzey" gorunumu kopuk cikar.
+ *
+ * YONTEM: Ilk extrude hareketinin XY noktasina bir tur sonra donuldugu yeri
+ * bulur; oradaki Z farki pitch'tir. Duz (yatay) kapali konturlarda bu fark
+ * ~0 cikar, yani spiral degildir.
+ *
+ * @returns pitch (mm) veya spiral degilse 0
+ */
+export function detectSpiralPitch(
+  moves: Move[],
+  bounds: BoundingBox,
+  rangeStart = 0,
+  rangeEnd = moves.length,
+): number {
+  const spanX = bounds.max.x - bounds.min.x;
+  const spanY = bounds.max.y - bounds.min.y;
+  const returnEpsilon = Math.max(0.5, 0.02 * Math.max(spanX, spanY));
+
+  let startIndex = -1;
+  for (let i = rangeStart; i < rangeEnd; i++) {
+    if (moves[i]?.kind === 'extrude') {
+      startIndex = i;
+      break;
+    }
+  }
+  if (startIndex < 0) return 0;
+
+  const start = moves[startIndex];
+  if (!start) return 0;
+  const originX = start.from.x;
+  const originY = start.from.y;
+  const originZ = start.from.z;
+
+  let scanned = 0;
+  let loopLength = 0;
+  let segments = 0;
+  let previous = start.from;
+
+  for (let i = startIndex; i < rangeEnd && scanned < SPIRAL_SCAN_LIMIT; i++) {
+    const move = moves[i];
+    if (!move || move.kind !== 'extrude') continue;
+    scanned++;
+    segments++;
+    loopLength += Math.hypot(move.to.x - previous.x, move.to.y - previous.y);
+    previous = move.to;
+
+    // Bir tur tamamlanmis sayilmasi icin en az 3 segment ve baslangictan
+    // uzaklasmis olmak gerekir; aksi halde ilk noktada hemen eslesir.
+    if (segments < 3 || loopLength < returnEpsilon * 4) continue;
+
+    const distanceToOrigin = Math.hypot(move.to.x - originX, move.to.y - originY);
+    if (distanceToOrigin > returnEpsilon) continue;
+
+    const pitch = move.to.z - originZ;
+    if (pitch > LAYER_Z_EPSILON && pitch <= MAX_BEAD_HEIGHT) return pitch;
+    return 0; // duz kapali kontur (pitch ~ 0) veya anlamsiz buyuklukte
+  }
+
+  return 0;
+}
+
+/** Bir bolumun "spiral" sayilmasi icin gereken en az hareket sayisi. */
+const MIN_SPIRAL_RUN = 8;
+
+/**
+ * Her hareket icin bead (malzeme) kalinligini hesaplar.
+ *
+ * Duz katmanli bolgelerde kalinlik = katmanlar arasi Z farki.
+ *
+ * Spiral/helis bolgelerinde ise bu yetmez: orada extrusion SIRASINDA Z
+ * surekli yukseldigi icin katman farki, hareket basina minik artisa
+ * esitlenir ve turlar arasinda boslukla kalir. Bu bolgeler ayri ayri
+ * tespit edilip kalinliklari "pitch" (bir ust turdaki gecise olan dikey
+ * mesafe) ile degistirilir.
+ *
+ * Bolum bazli calisir: ayni dosyada hem duz katmanlar hem helis olabilir
+ * (ornek: yay-g2g3.gcode).
+ */
+export function computeBeadHeights(
+  moves: Move[],
+  layers: { z: number }[],
+  bounds: BoundingBox,
+): Float32Array {
+  const layerSpacing = new Float32Array(layers.length);
+  for (let i = 0; i < layers.length; i++) {
+    const z = layers[i]?.z ?? 0;
+    const prevZ = i > 0 ? (layers[i - 1]?.z ?? 0) : 0;
+    const spacing = z - prevZ;
+    layerSpacing[i] = spacing > 0.001 ? spacing : SOLID_LAYER_HEIGHT_FALLBACK;
+  }
+
+  const heights = new Float32Array(moves.length);
+  for (let i = 0; i < moves.length; i++) {
+    const move = moves[i];
+    if (!move) continue;
+    heights[i] = Math.min(
+      layerSpacing[move.layerIndex] ?? SOLID_LAYER_HEIGHT_FALLBACK,
+      MAX_BEAD_HEIGHT,
+    );
+  }
+
+  // Extrusion sirasinda Z'nin yukseldigi ardisik bolumleri (spiral/helis) bul.
+  let runStart = -1;
+  const closeRun = (endExclusive: number) => {
+    if (runStart < 0) return;
+    if (endExclusive - runStart >= MIN_SPIRAL_RUN) {
+      const pitch = detectSpiralPitch(moves, bounds, runStart, endExclusive);
+      if (pitch > 0) {
+        for (let i = runStart; i < endExclusive; i++) {
+          heights[i] = Math.min(Math.max(heights[i] ?? 0, pitch), MAX_BEAD_HEIGHT);
+        }
+      }
+    }
+    runStart = -1;
+  };
+
+  for (let i = 0; i < moves.length; i++) {
+    const move = moves[i];
+    const rising =
+      move !== undefined &&
+      move.kind === 'extrude' &&
+      Math.abs(move.to.z - move.from.z) > LAYER_Z_EPSILON;
+
+    if (rising) {
+      if (runStart < 0) runStart = i;
+    } else if (move?.kind === 'extrude') {
+      // Duz extrusion spiral bolumunu bitirir; travel/retract bolmez
+      // (vazo modunda arada kisa travel'lar olabilir).
+      closeRun(i);
+    }
+  }
+  closeRun(moves.length);
+
+  return heights;
 }
 
 /**
@@ -72,15 +226,8 @@ export class SolidPrintLayer implements SceneLayer {
     }
     if (extrudeIndices.length === 0) return;
 
-    // Katman basina kalinlik: ardisik katmanlarin Z farki; ilki ve tekil
-    // katmanlar icin sabit varsayilan kullanilir.
-    const layerHeights = new Float32Array(layers.length);
-    for (let i = 0; i < layers.length; i++) {
-      const z = layers[i]?.z ?? 0;
-      const prevZ = i > 0 ? (layers[i - 1]?.z ?? 0) : 0;
-      const h = z - prevZ;
-      layerHeights[i] = h > 0.001 ? h : SOLID_LAYER_HEIGHT_FALLBACK;
-    }
+    // Hareket basina bead kalinligi (duz katmanlar + spiral/helis bolumleri).
+    const beadHeights = computeBeadHeights(moves, layers, data.stats.bounds);
 
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
@@ -125,7 +272,7 @@ export class SolidPrintLayer implements SceneLayer {
 
       tmpMid.addVectors(tmpFrom, tmpTo).multiplyScalar(0.5);
 
-      const height = layerHeights[move.layerIndex] ?? SOLID_LAYER_HEIGHT_FALLBACK;
+      const height = beadHeights[moveIndex] ?? SOLID_LAYER_HEIGHT_FALLBACK;
       // Kutu, G-code Z'sini (bu katmanin UST yuzeyi) tepe noktasi kabul edip
       // asagi dogru "height" kadar uzanmali — boylece ilk katman tam
       // tabladan (Z=0) baslar ve komsu katmanlar ozel bir durum gerekmeden
@@ -133,7 +280,9 @@ export class SolidPrintLayer implements SceneLayer {
       // asagi kaydirmak bunu saglar (ust yuz aynen tmpMid'de kalir).
       tmpMid.addScaledVector(tmpUp, -height / 2);
 
-      tmpScale.set(length, SOLID_EXTRUSION_WIDTH, height);
+      // Uzunluga bir genislik eklenir: ardisik bead'ler uclarda bindirilir,
+      // boylece kose donuslerinde kama seklinde bosluk kalmaz.
+      tmpScale.set(length + SOLID_EXTRUSION_WIDTH, SOLID_EXTRUSION_WIDTH, height);
 
       tmpMatrix.compose(tmpMid, tmpQuat, tmpScale);
       mesh.setMatrixAt(n, tmpMatrix);
