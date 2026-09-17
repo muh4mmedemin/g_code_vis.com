@@ -460,3 +460,32 @@ body {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* --- render modu segmented anahtar ---------------------------------------- */
+.view-options__row--segmented {
+  justify-content: space-between;
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+.segmented__btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.segmented__btn.is-active {
+  background: var(--bg-panel);
+  color: var(--text);
+}

@@ -17,7 +17,12 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   showBuildVolume: true,
   showAxes: true,
   isolateLayer: false,
+  renderMode: 'lines',
 };
+
+/** Solid render'daki extrusion "bead"inin genislik/yukseklik varsayilanlari (mm). */
+export const SOLID_EXTRUSION_WIDTH = 0.45;
+export const SOLID_LAYER_HEIGHT_FALLBACK = 0.2;
 
 /** Kabul edilen dosya uzantilari. */
 export const ACCEPTED_EXTENSIONS = ['.gcode', '.gco', '.g', '.nc', '.ngc', '.tap'] as const;
