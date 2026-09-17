@@ -55,8 +55,9 @@ function distanceBetween(a: Vec3, b: Vec3): number {
   return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
 }
 
-/** G0/G1 — dogrusal hareket. */
-function handleLinearMove(token: GcodeToken, ctx: HandlerContext): void {
+/** G0/G1 — dogrusal hareket. `rapid` yalnizca G0 icin true'dur. */
+function linearMove(rapid: boolean): CommandHandler {
+  return (token, ctx) => {
   const { state } = ctx;
   const from: Vec3 = { ...state.position };
 
@@ -85,9 +86,11 @@ function handleLinearMove(token: GcodeToken, ctx: HandlerContext): void {
     f: state.feedrate,
     layerIndex: 0,
     tool: state.tool,
+    rapid,
     distance,
     duration: estimateMoveDuration(distance, state.feedrate),
   });
+  };
 }
 
 /** G2 (saat yonu) / G3 (saat yonunun tersi) — yay hareketi. */
@@ -146,6 +149,7 @@ function handleArcMove(clockwise: boolean): CommandHandler {
         f: state.feedrate,
         layerIndex: 0,
         tool: state.tool,
+        rapid: false,
         distance,
         duration: estimateMoveDuration(distance, state.feedrate),
       });
@@ -170,6 +174,7 @@ function handleArcMove(clockwise: boolean): CommandHandler {
         f: state.feedrate,
         layerIndex: 0,
         tool: state.tool,
+        rapid: false,
         distance,
         duration: estimateMoveDuration(distance, state.feedrate),
       });
@@ -205,6 +210,7 @@ function handleHome(token: GcodeToken, ctx: HandlerContext): void {
     f: state.feedrate,
     layerIndex: 0,
     tool: state.tool,
+    rapid: true,
     distance,
     duration: 0,
   });
@@ -301,8 +307,8 @@ const IGNORED_COMMANDS = [
 
 export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   // Hareket
-  G0: handleLinearMove,
-  G1: handleLinearMove,
+  G0: linearMove(true),
+  G1: linearMove(false),
   G2: handleArcMove(true),
   G3: handleArcMove(false),
   G28: handleHome,

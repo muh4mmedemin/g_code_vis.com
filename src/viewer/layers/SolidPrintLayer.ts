@@ -136,7 +136,10 @@ export function computeBeadHeights(
   for (let i = 0; i < layers.length; i++) {
     const z = layers[i]?.z ?? 0;
     const prevZ = i > 0 ? (layers[i - 1]?.z ?? 0) : 0;
-    const spacing = z - prevZ;
+    // MUTLAK deger: baskida Z artar, CNC'de derinlik pasolari asagi iner
+    // (Z azalir). Isaretli fark kullanilirsa CNC'de tum kalinliklar
+    // varsayilana duser ve pasolar arasinda boslukla kalir.
+    const spacing = Math.abs(z - prevZ);
     layerSpacing[i] = spacing > 0.001 ? spacing : SOLID_LAYER_HEIGHT_FALLBACK;
   }
 
@@ -229,6 +232,15 @@ export class SolidPrintLayer implements SceneLayer {
     // Hareket basina bead kalinligi (duz katmanlar + spiral/helis bolumleri).
     const beadHeights = computeBeadHeights(moves, layers, data.stats.bounds);
 
+    // Malzemenin hareket Z'sine gore hangi yonde durdugu:
+    //  - Baskida (additive) G-code Z'si biriken malzemenin UST yuzeyidir,
+    //    dolayisiyla malzeme asagi dogru uzanir.
+    //  - CNC'de (subtractive) pasonun Z'si kesimin TABANIDIR; kaldirilan
+    //    malzeme yukari dogru, bir onceki paso seviyesine kadar uzanir.
+    // Ayrim, E ekseni verisi olup olmamasina bakilarak yapilir (parser da
+    // kesim/travel siniflandirmasinda ayni olcutu kullanir).
+    const subtractive = !moves.some((m) => m.e !== 0);
+
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshStandardMaterial({
       color: COLORS.extrude,
@@ -273,12 +285,11 @@ export class SolidPrintLayer implements SceneLayer {
       tmpMid.addVectors(tmpFrom, tmpTo).multiplyScalar(0.5);
 
       const height = beadHeights[moveIndex] ?? SOLID_LAYER_HEIGHT_FALLBACK;
-      // Kutu, G-code Z'sini (bu katmanin UST yuzeyi) tepe noktasi kabul edip
-      // asagi dogru "height" kadar uzanmali — boylece ilk katman tam
-      // tabladan (Z=0) baslar ve komsu katmanlar ozel bir durum gerekmeden
-      // birebir bitisir. Merkezi tmpMid'den tmpUp boyunca yarim yukseklik
-      // asagi kaydirmak bunu saglar (ust yuz aynen tmpMid'de kalir).
-      tmpMid.addScaledVector(tmpUp, -height / 2);
+      // Kutu, hareketin Z'sini bir yuzu kabul edip "height" kadar uzanir:
+      // baskida asagi (Z = ust yuzey), CNC'de yukari (Z = kesim tabani).
+      // Boylece baskida ilk katman tam tabladan baslar, CNC'de pasolar
+      // birbirine bitisir.
+      tmpMid.addScaledVector(tmpUp, (subtractive ? 1 : -1) * (height / 2));
 
       // Uzunluga bir genislik eklenir: ardisik bead'ler uclarda bindirilir,
       // boylece kose donuslerinde kama seklinde bosluk kalmaz.
