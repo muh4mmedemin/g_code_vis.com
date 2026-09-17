@@ -17,12 +17,17 @@ export function StatusBar() {
   const parseResult = useStore((s) => s.parseResult);
   const visibleLayer = useStore((s) => s.visibleLayer);
   const moveCursor = useStore((s) => s.moveCursor);
+  const selectLine = useStore((s) => s.selectLine);
 
   const lineCount = source ? source.split(/\r\n|\r|\n/).length : 0;
   const layers = parseResult?.layers ?? [];
   const activeLayer = layers[visibleLayer];
-  const warningCount =
-    parseResult?.diagnostics.filter((d) => d.severity !== 'info').length ?? 0;
+  // Bilgi seviyesindeki kayitlar (yok sayilan M kodlari gibi) sayaca girmez;
+  // kullaniciyi ilgilendiren gercek sorunlar uyari ve hatalardir.
+  const problems = parseResult?.diagnostics.filter((d) => d.severity !== 'info') ?? [];
+  const errorCount = problems.filter((d) => d.severity === 'error').length;
+  const warningCount = problems.length - errorCount;
+  const firstProblem = problems[0];
 
   const moves = parseResult?.moves ?? [];
   const currentMove = moves[Math.min(Math.floor(moveCursor), Math.max(moves.length - 1, 0))];
@@ -51,8 +56,21 @@ export function StatusBar() {
           )}
           <span>{parseResult.stats.totalMoves} hareket</span>
           <span>~{formatDuration(parseResult.stats.estimatedDuration)}</span>
-          {warningCount > 0 && (
-            <span className="statusbar__warning">{warningCount} uyari</span>
+          {problems.length > 0 && (
+            <button
+              type="button"
+              className={
+                errorCount > 0
+                  ? 'statusbar__problems statusbar__problems--error'
+                  : 'statusbar__problems'
+              }
+              title="Ilk soruna git"
+              onClick={() => firstProblem && selectLine(firstProblem.lineIndex)}
+            >
+              {errorCount > 0 && `${errorCount} hata`}
+              {errorCount > 0 && warningCount > 0 && ', '}
+              {warningCount > 0 && `${warningCount} uyari`}
+            </button>
           )}
         </>
       )}

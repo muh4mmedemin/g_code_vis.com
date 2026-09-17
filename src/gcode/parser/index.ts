@@ -119,6 +119,8 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
     });
   }
 
+  reclassifyCncMoves(moves);
+
   const layers = assignLayers(moves, layerHints);
   const stats: GcodeStats = computeStats(moves, layers, state.dwellSeconds);
   const buffers = buildToolpathBuffers(moves);
@@ -162,6 +164,31 @@ function dispatch(
     code: 'UNKNOWN_COMMAND',
     message: `Bilinmeyen komut: ${command}`,
   });
+}
+
+/**
+ * E (extrusion) bilgisi HIC bulunmayan dosyalarda hareketleri yeniden
+ * siniflandirir.
+ *
+ * NEDEN: Kesim/travel ayrimi normalde E artisina bakilarak yapilir. Gercek
+ * CNC dosyalarinda E diye bir eksen yoktur; orada ayrim G-code'un kendi
+ * semantigindedir: G0 = hizli bos konumlanma, G1/G2/G3 = isleme (kesim)
+ * hareketi. Bu fonksiyon olmadan butun CNC dosyalari bastan sona "travel"
+ * sayilir ve varsayilan ayarlarda gorunmez olurdu.
+ *
+ * Yalnizca dosyada hic E yoksa devreye girer; FDM dosyalarinin E'siz
+ * (travel) G1 hareketleri etkilenmez.
+ */
+function reclassifyCncMoves(moves: Move[]): void {
+  if (moves.length === 0) return;
+  const hasExtrusionData = moves.some((m) => m.e !== 0);
+  if (hasExtrusionData) return;
+
+  for (const move of moves) {
+    if (move.kind === 'home') continue;
+    if (move.distance === 0) continue;
+    move.kind = move.rapid ? 'travel' : 'extrude';
+  }
 }
 
 /**

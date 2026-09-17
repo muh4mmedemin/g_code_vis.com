@@ -59,6 +59,12 @@ export interface Move {
   layerIndex: number;
   /** Hareketi yapan takim/extruder indeksi (T komutu). */
   tool: number;
+  /**
+   * G0 (hizli/rapid) hareketi mi? G-code'da G0 bos konumlanma, G1/G2/G3 ise
+   * isleme hareketidir. E bilgisi olmayan CNC dosyalarinda kesim/travel
+   * ayrimi yalnizca bu farka dayanir.
+   */
+  rapid: boolean;
   /** Segment uzunlugu (mm, XYZ). Istatistik icin parser tarafindan doldurulur. */
   distance: number;
   /** Tahmini sure (saniye). Bkz. gcode/estimator. */

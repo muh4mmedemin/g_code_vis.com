@@ -5,6 +5,7 @@ import { BuildVolumeLayer } from './layers/BuildVolumeLayer';
 import { ToolpathLayer } from './layers/ToolpathLayer';
 import { SolidPrintLayer } from './layers/SolidPrintLayer';
 import { ToolHeadLayer } from './layers/ToolHeadLayer';
+import { PartPreviewLayer } from './layers/PartPreviewLayer';
 import { useStore } from '@/state/store';
 
 /** Bir hareketin animasyon suresi (saniye). Feedrate=0 veya cok kisa
@@ -34,6 +35,7 @@ export function Viewport() {
     const toolpathLayer = new ToolpathLayer();
     const solidPrintLayer = new SolidPrintLayer();
     const toolHeadLayer = new ToolHeadLayer();
+    const partPreviewLayer = new PartPreviewLayer();
     toolpathLayer.onFrameRequested = (min, max) => manager.frameBounds(min, max);
 
     manager.addLayer(gridLayer);
@@ -41,6 +43,7 @@ export function Viewport() {
     manager.addLayer(toolpathLayer);
     manager.addLayer(solidPrintLayer);
     manager.addLayer(toolHeadLayer);
+    manager.addLayer(partPreviewLayer);
 
     // store -> SceneManager: tek yonlu kopru. Sadece ilgili dilim degistiginde tetiklenir.
     const unsubData = useStore.subscribe((state, prev) => {
@@ -77,8 +80,18 @@ export function Viewport() {
       }
     });
 
+    // CNC modunda hedef parcanin onizlemesi (girilen olculerden).
+    const syncPartPreview = () => {
+      const state = useStore.getState();
+      partPreviewLayer.setPart(state.stock.size, state.mode === 'cnc');
+    };
+    const unsubPart = useStore.subscribe((state, prev) => {
+      if (state.stock !== prev.stock || state.mode !== prev.mode) syncPartPreview();
+    });
+
     // Baslangic durumunu uygula (ilk yuklemede zaten veri varsa).
     manager.broadcastViewSettings(useStore.getState().view);
+    syncPartPreview();
 
     // --- Simulasyon/oynatma dongusu (Faz 3) ---------------------------------
     // isPlaying acikken moveCursor'u gercek zamana gore ilerletir. Store'un
@@ -119,6 +132,7 @@ export function Viewport() {
       unsubView();
       unsubVolume();
       unsubProgress();
+      unsubPart();
       manager.dispose();
     };
   }, []);

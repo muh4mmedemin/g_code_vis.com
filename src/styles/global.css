@@ -142,6 +142,7 @@ body {
   top: 10px;
   right: 10px;
   flex-direction: column;
+  width: 210px;
 }
 
 .overlay-slot--right {
@@ -310,7 +311,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 170px;
 }
 
 .view-options__row {
@@ -488,4 +488,116 @@ body {
 .segmented__btn.is-active {
   background: var(--bg-panel);
   color: var(--text);
+}
+
+/* --- CNC is parcasi formu --------------------------------------------------- */
+.panel--machine-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel__title {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.job-form__row {
+  display: flex;
+  gap: 6px;
+}
+
+.job-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.job-form__field input {
+  width: 100%;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-size: 12px;
+}
+
+.job-form__field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.job-form__submit {
+  background: var(--accent);
+  border: none;
+  color: #1a1005;
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.job-form__submit:hover {
+  filter: brightness(1.08);
+}
+
+.job-form__hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+/* --- durum cubugundaki sorun sayaci ---------------------------------------- */
+.statusbar__problems {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 180, 84, 0.12);
+  border: 1px solid rgba(255, 180, 84, 0.45);
+  color: #ffb454;
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.statusbar__problems::before {
+  content: '⚠';
+}
+
+.statusbar__problems:hover {
+  background: rgba(255, 180, 84, 0.2);
+}
+
+.statusbar__problems--error {
+  background: rgba(255, 107, 107, 0.14);
+  border-color: rgba(255, 107, 107, 0.5);
+  color: #ff6b6b;
+}
+
+.statusbar__problems--error::before {
+  content: '⛔';
+}
+
+/* CodeMirror lint panelini koyu temaya uydur */
+.cm-panels,
+.cm-panel.cm-panel-lint {
+  background: var(--bg-elevated) !important;
+  color: var(--text);
+  border-color: var(--border) !important;
+}
+
+.cm-tooltip.cm-tooltip-lint {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
 }
