@@ -26,7 +26,11 @@ export class ToolHeadLayer implements SceneLayer {
     const tipHeight = 8;
     const tipRadius = 2.2;
     const tipGeometry = new THREE.ConeGeometry(tipRadius, tipHeight, 16);
-    tipGeometry.rotateX(Math.PI); // apex varsayilan +Y'de; -Z'ye çevir
+    // ConeGeometry'nin ekseni varsayilan olarak Y'dir (apex +Y'de). rotateX(PI)
+    // yalnizca Y ekseni uzerinde ters cevirir (konu hala yan yatirir!) —
+    // ekseni Z'ye tasimak icin -90 derece dondurmek gerekir; sonucta apex
+    // -Z'ye (asagi) bakar.
+    tipGeometry.rotateX(-Math.PI / 2);
     tipGeometry.translate(0, 0, tipHeight / 2);
     const tipMaterial = new THREE.MeshStandardMaterial({
       color: 0xff3b6b,
