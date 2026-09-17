@@ -1,0 +1,36 @@
+{
+  "name": "gcode-visualizer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "G-code dosyalarini tarayicida 3D olarak gorsellestiren, katman/simulasyon inceleme ve (ilerde) CNC talas kaldirma simulasyonu sunan client-side uygulama.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
+  },
+  "dependencies": {
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.4",
+    "@uiw/react-codemirror": "^4.23.10",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-resizable-panels": "^2.1.7",
+    "three": "^0.174.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/three": "^0.174.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.21.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0"
+  }
+}
