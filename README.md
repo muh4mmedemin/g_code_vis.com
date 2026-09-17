@@ -33,7 +33,9 @@ duzenine sahip client-side uygulama. Dosyalar sunucuya gonderilmez.
 
 ```bash
 npm install
-npm run dev
+npm run dev     # gelistirme sunucusu
+npm test        # parser testleri (Vitest)
+npm run build   # uretim derlemesi
 ```
 
 ## Belgeler
