@@ -12,6 +12,7 @@ export const DEFAULT_TOOL: ToolDefinition = { type: 'flat', diameter: 6, fluteLe
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   colorMode: 'kind',
+  showToolpath: true,
   showTravel: false,
   showGrid: true,
   showBuildVolume: true,

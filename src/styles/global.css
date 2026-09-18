@@ -601,3 +601,13 @@ body {
   color: var(--text);
   font-size: 12px;
 }
+
+.job-form__row--origin {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.job-form__label {
+  font-size: 10px;
+  color: var(--text-dim);
+}

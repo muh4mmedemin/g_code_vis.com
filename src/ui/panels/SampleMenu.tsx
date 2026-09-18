@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '@/state/store';
-import type { MachineMode } from '@/core/types';
+import type { MachineMode, StockDefinition, Vec3 } from '@/core/types';
 
 interface SampleEntry {
   label: string;
@@ -8,6 +8,11 @@ interface SampleEntry {
   file: string;
   /** Yuklendiginde makine modunu da bu deger otomatik ayarlanir. */
   mode: MachineMode;
+  /**
+   * CNC ornekleri icin ham blok: ornek secildiginde bu olculerde TAM DOLU
+   * bir blok kurulur ve program onu isler.
+   */
+  stock?: { size: Vec3; origin: Vec3; toolDiameter: number };
 }
 
 const SAMPLES: SampleEntry[] = [
@@ -36,10 +41,26 @@ const SAMPLES: SampleEntry[] = [
     mode: 'print',
   },
   {
+    label: 'Holder (blok isleme)',
+    description: '40x50x70 bloktan konnektor cebi + vida delikleri',
+    file: 'holder-cnc.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 40, y: 50, z: 70 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+    },
+  },
+  {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',
     mode: 'cnc',
+    stock: {
+      size: { x: 70, y: 50, z: 20 },
+      origin: { x: 30, y: 20, z: 0 },
+      toolDiameter: 6,
+    },
   },
 ];
 
@@ -48,6 +69,8 @@ export function SampleMenu() {
   const [open, setOpen] = useState(false);
   const loadFile = useStore((s) => s.loadFile);
   const setMode = useStore((s) => s.setMode);
+  const setStock = useStore((s) => s.setStock);
+  const setTool = useStore((s) => s.setTool);
 
   const handleSelect = async (sample: SampleEntry) => {
     setOpen(false);
@@ -56,6 +79,15 @@ export function SampleMenu() {
     const text = await response.text();
     const file = new File([text], sample.file, { type: 'text/plain' });
     setMode(sample.mode);
+    if (sample.stock) {
+      setTool({ diameter: sample.stock.toolDiameter });
+      const stock: StockDefinition = {
+        shape: 'box',
+        size: sample.stock.size,
+        origin: sample.stock.origin,
+      };
+      setStock(stock);
+    }
     void loadFile(file);
   };
 

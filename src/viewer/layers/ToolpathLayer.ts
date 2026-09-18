@@ -166,7 +166,7 @@ export class ToolpathLayer implements SceneLayer {
     null;
 
   onViewSettings(settings: ViewSettings): void {
-    this.linesVisible = settings.renderMode !== 'solid';
+    this.linesVisible = settings.showToolpath && settings.renderMode !== 'solid';
     if (this.lines) this.lines.visible = this.linesVisible;
     if (!this.material) return;
     this.material.uniforms.uShowTravel!.value = settings.showTravel ? 1 : 0;
