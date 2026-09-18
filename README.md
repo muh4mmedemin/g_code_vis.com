@@ -47,5 +47,5 @@ npm run build   # uretim derlemesi
 ## Durum
 
 Iskelet asamasi: klasor yapisi, tip sozlesmeleri, modul sinirlari ve
-genisleme noktalari hazir. Govde implementasyonlari `NOT_IMPLEMENTED` /
+genisleme noktalari hazir. Kalan bos govdeler `NOT_IMPLEMENTED` /
 `TODO(sonnet)` olarak isaretli.

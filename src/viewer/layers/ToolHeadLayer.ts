@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LayerContext, PlaybackFrame, SceneLayer } from '../core/SceneLayer';
-import type { Move, ParseResult } from '@/core/types';
+import type { Move, ParseResult, ViewSettings } from '@/core/types';
 
 /**
  * Simulasyon sirasinda nozzle/kesici takimin anlik konumunu gosteren isaretci
@@ -59,10 +59,24 @@ export class ToolHeadLayer implements SceneLayer {
     ctx.scene.add(group);
   }
 
+  private enabled = true;
+
   onData(data: ParseResult | null): void {
     this.moves = data?.moves ?? null;
-    if (this.group) this.group.visible = !!this.moves && this.moves.length > 0;
+    this.applyVisibility();
     this.ctx?.requestRender();
+  }
+
+  onViewSettings(settings: ViewSettings): void {
+    this.enabled = settings.showToolpath;
+    this.applyVisibility();
+    this.ctx?.requestRender();
+  }
+
+  private applyVisibility(): void {
+    if (this.group) {
+      this.group.visible = this.enabled && !!this.moves && this.moves.length > 0;
+    }
   }
 
   onProgress(state: PlaybackFrame): void {

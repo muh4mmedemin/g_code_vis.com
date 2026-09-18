@@ -42,7 +42,7 @@ uygular. Yeni bir gorsel alt sistem eklemek = yeni bir dosya + tek satir
 Bu yuzden "kesilen parcanin 3D modeli" (Faz 6) mevcut yapiya sonradan degil,
 **zaten ayrilmis bir yuvaya** takilir: `src/cnc/StockLayer.ts`.
 
-## 4. CNC talas kaldirma (Faz 6) yolu
+## 4. CNC talas kaldirma yolu (uygulandi)
 
 ```
 StockDefinition + ToolDefinition + cozunurluk
@@ -55,8 +55,17 @@ StockDefinition + ToolDefinition + cozunurluk
 Voxel + greedy meshing tercih edildi; CSG boolean cikarma cok sayida
 harekette pratik degil (bkz. proje dokumani 3.7).
 
-Pahali oldugu icin carve/mesh islemleri kendi worker'ina alinmali —
-`gcode/worker/` ile ayni protokol deseni kullanilir.
+Uygulama notlari:
+ - Grid CHUNK'lara (32^3) bolunur; bir kesme hareketi yalnizca dokundugu
+   chunk'lari kirli isaretler ve sadece onlar yeniden mesh'lenir. Tum blogu
+   her adimda yeniden mesh'lemek pratik degildi (40x50x70 blok / 0.5mm
+   hucre icin ~126ms).
+ - Takim supurmesi: kolon bazli. Her XY kolonu icin takimin o kolonun
+   yaricapi icinde kaldigi [tMin, tMax] araligindaki EN DUSUK uc Z'si
+   bulunur ve o Z'den yukarisi bosaltilir. Sadece "en yakin noktanin Z'si"
+   kullanilirsa dikey dalmalar (delik delme) hic talas kaldirmaz.
+ - Ileride: kure uclu takim destegi ve carve/mesh isleminin kendi
+   worker'ina alinmasi (`gcode/worker/` ile ayni protokol deseni).
 
 ## 5. Performans kararlari (dokumandaki acik sorularin cevabi)
 

@@ -181,6 +181,8 @@ export type RenderMode = 'lines' | 'solid';
 
 export interface ViewSettings {
   colorMode: ColorMode;
+  /** Takim yolu hic cizilsin mi? (CNC'de islenmis parcayi incelemek icin) */
+  showToolpath: boolean;
   showTravel: boolean;
   showGrid: boolean;
   showBuildVolume: boolean;

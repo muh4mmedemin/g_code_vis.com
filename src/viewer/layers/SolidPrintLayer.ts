@@ -331,7 +331,7 @@ export class SolidPrintLayer implements SceneLayer {
   }
 
   onViewSettings(settings: ViewSettings): void {
-    this.visible = settings.renderMode === 'solid';
+    this.visible = settings.showToolpath && settings.renderMode === 'solid';
     if (this.mesh) this.mesh.visible = this.visible;
 
     if (this.colorMode !== settings.colorMode) {

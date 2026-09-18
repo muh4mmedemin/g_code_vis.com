@@ -23,7 +23,10 @@ grep -rn "NOT_IMPLEMENTED\|TODO(sonnet)" src
 4. **Faz 3** — `playbackSlice` + `PlaybackControls` + `ToolHeadLayer`
 5. **Faz 4** — `gcode/stats.ts` + `StatsPanel`
 6. **Faz 5** — `G2/G3`, `gcode/dialects/*`
-7. **Faz 6** — `src/cnc/*` + `MachineModePanel`
+7. ~~**Faz 6** — `src/cnc/*` + `MachineModePanel`~~ TAMAMLANDI: ham blok
+   (VoxelGrid) + talas kaldirma (carver) + yuzey cikarma (mesher) +
+   `StockLayer`. Sonraki adimlar: kure uclu (ball nose) takim destegi,
+   carve/mesh isleminin kendi worker'ina alinmasi.
 
 ## Bozulmamasi gereken kurallar
 

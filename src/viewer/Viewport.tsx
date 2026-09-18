@@ -5,7 +5,7 @@ import { BuildVolumeLayer } from './layers/BuildVolumeLayer';
 import { ToolpathLayer } from './layers/ToolpathLayer';
 import { SolidPrintLayer } from './layers/SolidPrintLayer';
 import { ToolHeadLayer } from './layers/ToolHeadLayer';
-import { PartPreviewLayer } from './layers/PartPreviewLayer';
+import { StockLayer } from '@/cnc/StockLayer';
 import { useStore } from '@/state/store';
 
 /** Bir hareketin animasyon suresi (saniye). Feedrate=0 veya cok kisa
@@ -35,15 +35,55 @@ export function Viewport() {
     const toolpathLayer = new ToolpathLayer();
     const solidPrintLayer = new SolidPrintLayer();
     const toolHeadLayer = new ToolHeadLayer();
-    const partPreviewLayer = new PartPreviewLayer();
-    toolpathLayer.onFrameRequested = (min, max) => manager.frameBounds(min, max);
+    const stockLayer = new StockLayer();
+    /**
+     * Kadraj: CNC modunda ham blok toolpath'ten cok daha buyuk olabilir
+     * (ornegin 40x50x70 blokta 24x16 bir cep). Yalnizca toolpath'e gore
+     * kadraj alinirsa blok ekrana sigmaz; bu yuzden blok varken iki sinir
+     * birlestirilir.
+     */
+    const frameWithStock = (
+      min: [number, number, number],
+      max: [number, number, number],
+    ) => {
+      const state = useStore.getState();
+      if (state.mode === 'cnc') {
+        const { size, origin } = state.stock;
+        const stockMin: [number, number, number] = [
+          origin.x - size.x / 2,
+          origin.y - size.y / 2,
+          origin.z - size.z,
+        ];
+        const stockMax: [number, number, number] = [
+          origin.x + size.x / 2,
+          origin.y + size.y / 2,
+          origin.z,
+        ];
+        manager.frameBounds(
+          [
+            Math.min(min[0], stockMin[0]),
+            Math.min(min[1], stockMin[1]),
+            Math.min(min[2], stockMin[2]),
+          ],
+          [
+            Math.max(max[0], stockMax[0]),
+            Math.max(max[1], stockMax[1]),
+            Math.max(max[2], stockMax[2]),
+          ],
+        );
+        return;
+      }
+      manager.frameBounds(min, max);
+    };
+
+    toolpathLayer.onFrameRequested = frameWithStock;
 
     manager.addLayer(gridLayer);
     manager.addLayer(buildVolumeLayer);
     manager.addLayer(toolpathLayer);
     manager.addLayer(solidPrintLayer);
     manager.addLayer(toolHeadLayer);
-    manager.addLayer(partPreviewLayer);
+    manager.addLayer(stockLayer);
 
     // store -> SceneManager: tek yonlu kopru. Sadece ilgili dilim degistiginde tetiklenir.
     const unsubData = useStore.subscribe((state, prev) => {
@@ -80,18 +120,26 @@ export function Viewport() {
       }
     });
 
-    // CNC modunda hedef parcanin onizlemesi (girilen olculerden).
-    const syncPartPreview = () => {
-      const state = useStore.getState();
-      partPreviewLayer.setPart(state.stock.size, state.mode === 'cnc');
-    };
-    const unsubPart = useStore.subscribe((state, prev) => {
-      if (state.stock !== prev.stock || state.mode !== prev.mode) syncPartPreview();
+    // CNC modunda ham blok: stok tanimi degistiginde blok yeniden kurulur,
+    // mod degisiminde yalnizca gorunurluk degisir (blok korunur).
+    const unsubStock = useStore.subscribe((state, prev) => {
+      if (state.stock !== prev.stock) {
+        stockLayer.setStock(state.stock, state.tool, state.voxelResolution);
+        // Yeni blok olusturuldugunda kadraji bloga gore ayarla.
+        const bounds = state.parseResult?.stats.bounds;
+        frameWithStock(
+          bounds ? [bounds.min.x, bounds.min.y, bounds.min.z] : [0, 0, 0],
+          bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : [0, 0, 0],
+        );
+      }
+      if (state.mode !== prev.mode) {
+        stockLayer.setVisible(state.mode === 'cnc');
+      }
     });
 
     // Baslangic durumunu uygula (ilk yuklemede zaten veri varsa).
     manager.broadcastViewSettings(useStore.getState().view);
-    syncPartPreview();
+    stockLayer.setVisible(useStore.getState().mode === 'cnc');
 
     // --- Simulasyon/oynatma dongusu (Faz 3) ---------------------------------
     // isPlaying acikken moveCursor'u gercek zamana gore ilerletir. Store'un
@@ -132,7 +180,7 @@ export function Viewport() {
       unsubView();
       unsubVolume();
       unsubProgress();
-      unsubPart();
+      unsubStock();
       manager.dispose();
     };
   }, []);

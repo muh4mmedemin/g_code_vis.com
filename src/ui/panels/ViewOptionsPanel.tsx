@@ -30,6 +30,14 @@ export function ViewOptionsPanel() {
       <label className="view-options__row">
         <input
           type="checkbox"
+          checked={view.showToolpath}
+          onChange={(e) => setView({ showToolpath: e.target.checked })}
+        />
+        Takim yolu
+      </label>
+      <label className="view-options__row">
+        <input
+          type="checkbox"
           checked={view.showTravel}
           onChange={(e) => setView({ showTravel: e.target.checked })}
         />
