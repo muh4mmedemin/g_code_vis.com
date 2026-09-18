@@ -134,12 +134,14 @@ export function Viewport() {
       }
       if (state.mode !== prev.mode) {
         stockLayer.setVisible(state.mode === 'cnc');
+        solidPrintLayer.setMachineMode(state.mode);
       }
     });
 
     // Baslangic durumunu uygula (ilk yuklemede zaten veri varsa).
     manager.broadcastViewSettings(useStore.getState().view);
     stockLayer.setVisible(useStore.getState().mode === 'cnc');
+    solidPrintLayer.setMachineMode(useStore.getState().mode);
 
     // --- Simulasyon/oynatma dongusu (Faz 3) ---------------------------------
     // isPlaying acikken moveCursor'u gercek zamana gore ilerletir. Store'un

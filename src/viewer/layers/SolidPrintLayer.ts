@@ -211,9 +211,28 @@ export class SolidPrintLayer implements SceneLayer {
   private colorMode: ViewSettings['colorMode'] = 'kind';
   private visible = false;
   private layerCount = 0;
+  /**
+   * CNC modunda gercek talas kaldirma StockLayer (voxel carving) tarafindan
+   * yapilir. Bu katman "bead" (kutucuk) ekleyerek malzeme birikiyormus gibi
+   * gosterir — CNC'de bu, blok kesilirken sanki AYNI ANDA baski da yapiliyor
+   * gibi yanlis bir gorunum verir. Bu yuzden CNC modunda tamamen gizlenir;
+   * yalnizca print modunda gosterilir.
+   */
+  private machineMode: 'print' | 'cnc' = 'print';
 
   init(ctx: LayerContext): void {
     this.ctx = ctx;
+  }
+
+  setMachineMode(mode: 'print' | 'cnc'): void {
+    this.machineMode = mode;
+    this.applyVisibility();
+  }
+
+  private applyVisibility(): void {
+    const visible = this.machineMode === 'print' && this.visible;
+    if (this.mesh) this.mesh.visible = visible;
+    this.ctx?.requestRender();
   }
 
   onData(data: ParseResult | null): void {
@@ -301,13 +320,13 @@ export class SolidPrintLayer implements SceneLayer {
 
     mesh.instanceMatrix.needsUpdate = true;
     mesh.count = extrudeIndices.length;
-    mesh.visible = this.visible;
 
     this.mesh = mesh;
     this.material = material;
     this.instanceMoveIndex = instanceMoveIndex;
     this.instanceLayerIndex = instanceLayerIndex;
     this.applyColors();
+    this.applyVisibility();
 
     this.ctx?.scene.add(mesh);
     this.ctx?.requestRender();
@@ -332,7 +351,7 @@ export class SolidPrintLayer implements SceneLayer {
 
   onViewSettings(settings: ViewSettings): void {
     this.visible = settings.showToolpath && settings.renderMode === 'solid';
-    if (this.mesh) this.mesh.visible = this.visible;
+    this.applyVisibility();
 
     if (this.colorMode !== settings.colorMode) {
       this.colorMode = settings.colorMode;
