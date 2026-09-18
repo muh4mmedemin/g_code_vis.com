@@ -199,3 +199,130 @@ describe('meshVoxels', () => {
     expect(mesh.indices.length).toBe(0);
   });
 });
+
+describe('delme cevrimleri (canned cycles) ile oyma', () => {
+  /** Verilen dunya noktasindaki hucre dolu mu? */
+  const solidAt = (grid: VoxelGrid, x: number, y: number, z: number): boolean => {
+    const [cx, cy, cz] = grid.worldToCell(x, y, z);
+    return grid.isSolid(cx, cy, cz);
+  };
+
+  const carveProgram = (source: string, resolution = 60) => {
+    const grid = gridFor(resolution);
+    const r = parseGcode(source);
+    carveRange(grid, r.moves, 0, r.moves.length, TOOL);
+    return { grid, result: r };
+  };
+
+  it('G81 cevrimi blogu gercekten deler', () => {
+    const { grid } = carveProgram(
+      ['G21', 'G90', 'M3 S2000', 'G0 Z5', 'G99 G81 X0 Y0 Z-20 R2 F120', 'G80'].join('\n'),
+    );
+
+    // Delik ekseni bosalmis olmali...
+    expect(solidAt(grid, 0, 0, -5)).toBe(false);
+    expect(solidAt(grid, 0, 0, -18)).toBe(false);
+    // ...delik dibinin altindaki malzeme ve cevre saglam kalmali.
+    expect(solidAt(grid, 0, 0, -25)).toBe(true);
+    expect(solidAt(grid, 12, 0, -5)).toBe(true);
+  });
+
+  it('modal tekrar ile acilan her delik islenir', () => {
+    const { grid } = carveProgram(
+      [
+        'G21', 'G90', 'M3 S2000', 'G0 Z5',
+        'G99 G83 X-10 Y-10 Z-15 R2 Q4 F120',
+        'X10 Y-10',
+        'X10 Y10',
+        'G80',
+      ].join('\n'),
+    );
+
+    for (const [x, y] of [
+      [-10, -10],
+      [10, -10],
+      [10, 10],
+    ] as const) {
+      expect(solidAt(grid, x, y, -10), `delik (${x},${y}) acilmadi`).toBe(false);
+    }
+    // Cevrimde yer almayan dorduncu kose dolu kalmali.
+    expect(solidAt(grid, -10, 10, -10)).toBe(true);
+  });
+
+  it('G83 gagalamasi tek pasolu G81 ile ayni deligi acar', () => {
+    const peck = carveProgram(
+      ['G21', 'G90', 'M3 S2000', 'G0 Z5', 'G99 G83 X0 Y0 Z-18 R2 Q3 F120', 'G80'].join('\n'),
+    ).grid;
+    const single = carveProgram(
+      ['G21', 'G90', 'M3 S2000', 'G0 Z5', 'G99 G81 X0 Y0 Z-18 R2 F120', 'G80'].join('\n'),
+    ).grid;
+
+    expect(peck.countSolid()).toBe(single.countSolid());
+  });
+});
+
+/**
+ * Ornek holder programinin ISLENMIS PARCASI dogru mu?
+ *
+ * Ekran goruntusu "bir sey oyulmus" der; bu test parcanin GEREKEN yerlerinin
+ * bosaldigini, gerekmeyen yerlerinin ise saglam kaldigini olcerek soyler.
+ */
+describe('holder-konnektor ornegi', () => {
+  const source = Object.values(
+    import.meta.glob('../../../public/samples/holder-konnektor.gcode', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>,
+  )[0] as string;
+
+  const HOLDER_STOCK: StockDefinition = {
+    shape: 'box',
+    size: { x: 45, y: 60, z: 80 },
+    origin: { x: 0, y: 0, z: 0 },
+  };
+
+  const carved = (() => {
+    const grid = VoxelGrid.fromStock(HOLDER_STOCK, 90);
+    grid.fill();
+    const r = parseGcode(source);
+    carveRange(grid, r.moves, 0, r.moves.length, TOOL);
+    return grid;
+  })();
+
+  const solidAt = (x: number, y: number, z: number): boolean => {
+    const [cx, cy, cz] = carved.worldToCell(x, y, z);
+    return carved.isSolid(cx, cy, cz);
+  };
+
+  it('konnektor cebi acilmis, taban saglam kalmis', () => {
+    expect(solidAt(0, 0, -7)).toBe(false);
+    expect(solidAt(10, 5, -7)).toBe(false);
+    expect(solidAt(0, 0, -20)).toBe(true);
+  });
+
+  it('dort vida deligi delinmis, dibinin altinda malzeme kalmis', () => {
+    for (const [x, y] of [
+      [-16, -22],
+      [16, -22],
+      [16, 22],
+      [-16, 22],
+    ] as const) {
+      expect(solidAt(x, y, -12), `vida deligi (${x},${y})`).toBe(false);
+      expect(solidAt(x, y, -30), `delik dibi (${x},${y})`).toBe(true);
+    }
+  });
+
+  it('kablo kanali Y boyunca acilmis', () => {
+    expect(solidAt(0, 25, -3)).toBe(false);
+    expect(solidAt(0, -25, -3)).toBe(false);
+    // Kanal 6mm derin: altinda malzeme durmali.
+    expect(solidAt(0, 25, -12)).toBe(true);
+  });
+
+  it('blogun govdesi ve alt yarisi el degmeden kalmis', () => {
+    expect(solidAt(0, 0, -50)).toBe(true);
+    expect(solidAt(-20, -28, -60)).toBe(true);
+    expect(solidAt(20, 28, -75)).toBe(true);
+  });
+});

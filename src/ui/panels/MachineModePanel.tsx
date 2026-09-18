@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '@/state/store';
 
 /**
@@ -56,8 +56,27 @@ export function MachineModePanel() {
   const seekToMove = useStore((s) => s.seekToMove);
   const pause = useStore((s) => s.pause);
 
+  const stock = useStore((s) => s.stock);
+  const toolDiameter = useStore((s) => s.tool.diameter);
+  const voxelResolution = useStore((s) => s.voxelResolution);
+
   const [form, setForm] = useState<BlockForm>(DEFAULT_FORM);
   const [originMode, setOriginMode] = useState<OriginMode>('center');
+
+  // Blok disaridan da kurulabilir (ornegin "Ornekler" menusunden bir CNC
+  // programi secildiginde). O durumda alanlarin eski degerleri gostermesi
+  // kullaniciyi yanlis yonlendirir; sahnedeki blok ile form hep ayni seyi
+  // soylemeli.
+  useEffect(() => {
+    setForm({
+      x: stock.size.x,
+      y: stock.size.y,
+      z: stock.size.z,
+      toolDiameter,
+      resolution: voxelResolution,
+    });
+    setOriginMode(stock.origin.x === 0 && stock.origin.y === 0 ? 'center' : 'corner');
+  }, [stock, toolDiameter, voxelResolution]);
 
   if (mode !== 'cnc') return null;
 

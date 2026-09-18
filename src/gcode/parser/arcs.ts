@@ -26,6 +26,11 @@ export interface ArcSpec {
   clockwise: boolean;
   /** Merkez ofseti (baslangica gore, mm). R kullanildiysa undefined. */
   offset?: { i?: number; j?: number; k?: number };
+  /**
+   * I/J/K'nin anlami: 'incremental' (G91.1, varsayilan) baslangica gore ofset,
+   * 'absolute' (G90.1) merkezin mutlak koordinati.
+   */
+  offsetMode?: 'incremental' | 'absolute';
   /** Yaricap formu (mm). Negatif ise 180 dereceden buyuk yay secilir. */
   radius?: number;
 }
@@ -35,6 +40,16 @@ export interface ArcResult {
   points: Vec3[];
   /** Yayin yaklasik uzunlugu (mm, helis yuksekligi dahil). */
   length: number;
+  /** Merkezin baslangic noktasina uzakligi (mm). */
+  radiusStart: number;
+  /**
+   * Merkezin bitis noktasina uzakligi (mm).
+   *
+   * Saglikli bir yayda radiusStart ile esittir. Elle yazilmis G-code'da I/J
+   * degerleri tutmadiginda ikisi ayrisir; kontrol uniteleri bu durumda alarm
+   * verir, biz uyari uretiriz (bkz. commands.ts / ARC_RADIUS_MISMATCH).
+   */
+  radiusEnd: number;
 }
 
 /** Duzleme gore (eksen1, eksen2, dik eksen) uclusu. */
@@ -72,8 +87,14 @@ export function segmentArc(spec: ArcSpec): ArcResult | null {
 
   if (spec.offset && (spec.offset.i !== undefined || spec.offset.j !== undefined || spec.offset.k !== undefined)) {
     const [offU, offV] = planeOffsets(spec.plane, spec.offset);
-    centerU = startU + offU;
-    centerV = startV + offV;
+    if (spec.offsetMode === 'absolute') {
+      // G90.1: I/J/K dogrudan merkezin mutlak koordinatlaridir.
+      centerU = offU;
+      centerV = offV;
+    } else {
+      centerU = startU + offU;
+      centerV = startV + offV;
+    }
   } else if (spec.radius !== undefined && spec.radius !== 0) {
     const r = spec.radius;
     const du = endU - startU;
@@ -149,8 +170,9 @@ export function segmentArc(spec: ArcSpec): ArcResult | null {
   }
 
   const arcLength = Math.hypot(absSweep * radiusStart, perpDelta);
+  const radiusEnd = Math.hypot(endU - centerU, endV - centerV);
 
-  return { points, length: arcLength };
+  return { points, length: arcLength, radiusStart, radiusEnd };
 }
 
 export { CHORD_TOLERANCE, MAX_SEGMENT_ANGLE };

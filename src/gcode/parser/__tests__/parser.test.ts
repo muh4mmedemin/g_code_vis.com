@@ -261,7 +261,9 @@ describe('parseGcode — takim, bekleme, tanilar', () => {
   });
 
   it('bilinen yardimci M kodlari icin uyari uretmez', () => {
-    const r = parseGcode(g('M104 S200', 'M106 S255', 'M107', 'M84', 'G90', 'G1 X1'));
+    const r = parseGcode(
+      g('M104 S200', 'M106 S255', 'M107', 'M84', 'G21', 'G90', 'M83', 'G1 X1 E0.1 F1200'),
+    );
     expect(r.diagnostics.filter((d) => d.severity === 'warning')).toHaveLength(0);
   });
 
@@ -276,7 +278,9 @@ describe('parseGcode — takim, bekleme, tanilar', () => {
   it('tani sayisini sinirlar', () => {
     const many = Array.from({ length: 1000 }, () => 'G8888').join('\n');
     const r = parseGcode(many, { maxDiagnostics: 10 });
-    expect(r.diagnostics.length).toBeLessThanOrEqual(11); // 10 + kirpma bilgisi
+    expect(r.diagnostics.filter((d) => d.code === 'UNKNOWN_COMMAND').length).toBeLessThanOrEqual(
+      10,
+    );
     expect(r.diagnostics.some((d) => d.code === 'DIAGNOSTICS_TRUNCATED')).toBe(true);
   });
 });
@@ -330,5 +334,183 @@ describe('parseGcode — dayaniklilik', () => {
     const ratios: number[] = [];
     parseGcode(g('G90', 'G1 X1', 'G1 X2'), { onProgress: (r) => ratios.push(r) });
     expect(ratios[ratios.length - 1]).toBe(1);
+  });
+});
+
+describe('parseGcode — modal hareket (komut tekrari)', () => {
+  it('komutsuz satirlarda son hareket komutunu tekrarlar', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 Y0 F300', 'X20', 'X30 Y5'));
+    expect(r.moves).toHaveLength(3);
+    expect(r.moves[1]?.to).toEqual({ x: 20, y: 0, z: 0 });
+    expect(r.moves[2]?.to).toEqual({ x: 30, y: 5, z: 0 });
+    expect(r.moves.every((m) => !m.rapid)).toBe(true);
+  });
+
+  it('G0 modalligini korur ve rapid bayragini tasir', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 X5', 'X15'));
+    expect(r.moves[1]?.rapid).toBe(true);
+  });
+
+  it('yalnizca F veya S iceren satirlar hareket uretmez', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 F300', 'F600', 'S1200'));
+    expect(r.moves).toHaveLength(1);
+  });
+
+  it('modal G2 yay tekrarini destekler', () => {
+    const r = parseGcode(g('G21', 'G90', 'G2 X10 Y0 I5 J0 F400', 'X0 Y0 I-5 J0'));
+    const lines = new Set(r.moves.map((m) => m.lineIndex));
+    expect(lines.size).toBe(2);
+  });
+});
+
+describe('parseGcode — delme cevrimleri (canned cycles)', () => {
+  it('G81 ile delik deler ve R duzlemine geri ceker', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 X10 Y10 Z5', 'G99 G81 X10 Y10 Z-8 R2 F120', 'G80'));
+    const cuts = r.moves.filter((m) => !m.rapid && m.distance > 0);
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0]?.from.z).toBeCloseTo(2);
+    expect(cuts[0]?.to.z).toBeCloseTo(-8);
+    // G99: R duzlemine donulur, baslangic Z'sine degil.
+    expect(r.moves[r.moves.length - 1]?.to.z).toBeCloseTo(2);
+  });
+
+  it('G98 ile baslangic Z yuksekligine geri doner', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 X0 Y0 Z10', 'G98 G81 X0 Y0 Z-5 R1 F100', 'G80'));
+    expect(r.moves[r.moves.length - 1]?.to.z).toBeCloseTo(10);
+  });
+
+  it('cevrim modaldir: sonraki X/Y satirlari yeni delik acar', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'G0 Z5', 'G99 G81 X0 Y0 Z-6 R2 F120', 'X20 Y0', 'X20 Y20', 'G80'),
+    );
+    const plunges = r.moves.filter((m) => !m.rapid && m.to.z < 0);
+    expect(plunges).toHaveLength(3);
+    expect(plunges.map((m) => [m.to.x, m.to.y])).toEqual([
+      [0, 0],
+      [20, 0],
+      [20, 20],
+    ]);
+  });
+
+  it('G80 sonrasi X/Y satirlari delik acmaz', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 Z5', 'G81 X0 Y0 Z-6 R2 F120', 'G80', 'X50 Y50'));
+    const plunges = r.moves.filter((m) => !m.rapid && m.to.z < 0);
+    expect(plunges).toHaveLength(1);
+  });
+
+  it('G83 gagalamayi Q adimlarina boler', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 Z5', 'G99 G83 X0 Y0 Z-9 R1 Q3 F100', 'G80'));
+    const plunges = r.moves.filter((m) => !m.rapid && m.distance > 0);
+    expect(plunges).toHaveLength(4); // 1 -> -2 -> -5 -> -8 -> -9
+    expect(plunges[plunges.length - 1]?.to.z).toBeCloseTo(-9);
+    // Her gagalamadan sonra R duzlemine tam geri cekilme olmali (talas bosaltma).
+    expect(r.moves.filter((m) => m.rapid && Math.abs(m.to.z - 1) < 1e-6).length).toBeGreaterThan(2);
+  });
+
+  it('G85 delikten isleme hiziyla cikar', () => {
+    const r = parseGcode(g('G21', 'G90', 'G0 Z5', 'G99 G85 X0 Y0 Z-4 R1 F80', 'G80'));
+    const feeds = r.moves.filter((m) => !m.rapid && m.distance > 0);
+    expect(feeds).toHaveLength(2); // dalis + isleme hiziyla cikis
+    expect(feeds[1]?.to.z).toBeCloseTo(1);
+  });
+
+  it('R veya Z eksikse hata uretir ve hareket olusturmaz', () => {
+    const r = parseGcode(g('G21', 'G90', 'G81 X0 Y0 F100'));
+    expect(r.diagnostics.some((d) => d.code === 'CANNED_CYCLE_INCOMPLETE')).toBe(true);
+    expect(r.moves).toHaveLength(0);
+  });
+
+  it('G82 bekleme suresini tahmine ekler', () => {
+    const withDwell = parseGcode(g('G21', 'G90', 'G0 Z5', 'G82 X0 Y0 Z-3 R1 P1.5 F100', 'G80'));
+    const without = parseGcode(g('G21', 'G90', 'G0 Z5', 'G81 X0 Y0 Z-3 R1 F100', 'G80'));
+    expect(withDwell.stats.estimatedDuration - without.stats.estimatedDuration).toBeCloseTo(1.5);
+  });
+});
+
+describe('parseGcode — CNC komut bicimleri', () => {
+  it('M6 T2 bicimindeki takim degisimini uygular', () => {
+    const r = parseGcode(g('G21', 'G90', 'M6 T2', 'G1 X10 F200'));
+    expect(r.moves[0]?.tool).toBe(2);
+  });
+
+  it('T2 M6 bicimini de uygular', () => {
+    const r = parseGcode(g('G21', 'G90', 'T2 M6', 'G1 X10 F200'));
+    expect(r.moves[0]?.tool).toBe(2);
+  });
+
+  it('tek haneyi asan takim numaralarini destekler (T12)', () => {
+    const r = parseGcode(g('G21', 'G90', 'T12 M6', 'G1 X10 F200'));
+    expect(r.moves[0]?.tool).toBe(12);
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+  });
+
+  it('G90.1 ile I/J mutlak merkez olarak yorumlanir', () => {
+    const abs = parseGcode(g('G21', 'G90', 'G90.1', 'G0 X10 Y0', 'G3 X0 Y10 I0 J0 F300'));
+    const last = abs.moves[abs.moves.length - 1];
+    expect(last?.to.x).toBeCloseTo(0);
+    expect(last?.to.y).toBeCloseTo(10);
+    // Merkez (0,0) oldugundan tum noktalar 10mm yaricapta olmali.
+    const arcPoints = abs.moves.filter((m) => !m.rapid);
+    for (const m of arcPoints) {
+      expect(Math.hypot(m.to.x, m.to.y)).toBeCloseTo(10, 3);
+    }
+    expect(abs.diagnostics.some((d) => d.code === 'ARC_RADIUS_MISMATCH')).toBe(false);
+  });
+
+  it('tutarsiz yay yaricapinda uyarir ama cizmeye devam eder', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 Y0 F300', 'G2 X0 Y30 I-5 J0'));
+    expect(r.diagnostics.some((d) => d.code === 'ARC_RADIUS_MISMATCH')).toBe(true);
+    expect(r.moves.length).toBeGreaterThan(2);
+  });
+});
+
+describe('parseGcode — anlamsal uyarilar', () => {
+  it('birim ve konumlandirma modu bildirilmediginde uyarir', () => {
+    const r = parseGcode(g('G1 X10 F200'));
+    expect(r.diagnostics.some((d) => d.code === 'NO_UNITS')).toBe(true);
+    expect(r.diagnostics.some((d) => d.code === 'NO_POSITIONING_MODE')).toBe(true);
+  });
+
+  it('is mili calistirilmadan kesim yapilirsa uyarir', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 F200'));
+    expect(r.diagnostics.some((d) => d.code === 'SPINDLE_NOT_STARTED')).toBe(true);
+
+    const ok = parseGcode(g('G21', 'G90', 'M3 S1000', 'G1 X10 F200'));
+    expect(ok.diagnostics.some((d) => d.code === 'SPINDLE_NOT_STARTED')).toBe(false);
+  });
+
+  it('F tanimsiz kesme hareketinde uyarir', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G1 X10'));
+    expect(r.diagnostics.some((d) => d.code === 'ZERO_FEEDRATE')).toBe(true);
+  });
+
+  it('malzeme icinde hizli yatay hareketi yakalar', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'G1 Z-5 F100', 'G1 X20', 'G0 X40 Y10', 'G0 Z5'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'RAPID_INSIDE_STOCK')).toBe(true);
+  });
+
+  it('guvenli Z yuksekliginden yapilan hizli hareketleri uyarmaz', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'G0 Z5', 'G1 Z-5 F100', 'G1 X20', 'G0 Z5', 'G0 X40 Y10'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'RAPID_INSIDE_STOCK')).toBe(false);
+  });
+
+  it('baski dosyasinda tabla altina extrude yapilmasini hata sayar', () => {
+    const r = parseGcode(g('G21', 'G90', 'M83', 'G1 Z-1 F300', 'G1 X10 E1'));
+    expect(r.diagnostics.some((d) => d.code === 'EXTRUDE_BELOW_BED')).toBe(true);
+  });
+
+  it('hicbir hareket yoksa hata uretir', () => {
+    const r = parseGcode(g('; sadece yorum', 'M104 S200'));
+    expect(r.diagnostics.some((d) => d.code === 'NO_MOTION')).toBe(true);
+  });
+
+  it('tanilar satir sirasina gore siralanir', () => {
+    const r = parseGcode(g('G1 X10 F200', 'G9999', 'M9999'));
+    const lines = r.diagnostics.map((d) => d.lineIndex);
+    expect([...lines].sort((a, b) => a - b)).toEqual(lines);
   });
 });

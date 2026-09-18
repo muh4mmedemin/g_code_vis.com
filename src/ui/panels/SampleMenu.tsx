@@ -52,6 +52,61 @@ const SAMPLES: SampleEntry[] = [
     },
   },
   {
+    label: 'Holder (konnektor yuvasi)',
+    description: '45x60x80 derlin blok: cep, 4 vida deligi, kablo kanali, pah',
+    file: 'holder-konnektor.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 45, y: 60, z: 80 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+    },
+  },
+  {
+    label: 'Delik tablasi (G81/G83)',
+    description: 'Delme cevrimleri: civata dairesi, gagalamali derin delik, havsa',
+    file: 'cnc-delik-tablasi.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 100, y: 80, z: 12 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+    },
+  },
+  {
+    label: 'Modal kontur',
+    description: 'Komut sozcugu tekrarlamayan tezgah kodu: kontur + kanal',
+    file: 'cnc-modal-kontur.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 80, y: 60, z: 15 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+    },
+  },
+  {
+    label: 'Helisel dalisli cep',
+    description: 'Helis ile dalis, spiral tarama ve mutlak yay merkezi (G90.1)',
+    file: 'cnc-helis-cep.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 70, y: 70, z: 20 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+    },
+  },
+  {
+    label: 'Inc program (G20)',
+    description: '3x2x0.5 inc blok: inc birimli cep ve delikler',
+    file: 'cnc-inc-program.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 76.2, y: 50.8, z: 12.7 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6.35,
+    },
+  },
+  {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',

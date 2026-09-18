@@ -1,6 +1,7 @@
 ; Ornek: %100 dolgulu (infill) katiki kup
 ; 20x20x20mm, 10 katman x 2mm (kalin katman, dosyayi kisa tutmak icin)
 ; Her katman: dis cerceve + tam alani tarayan zikzak dolgu (surekli, tek parca)
+G21
 G90
 M82
 G28
