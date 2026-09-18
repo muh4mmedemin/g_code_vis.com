@@ -1,8 +1,8 @@
 import type { GcodeStats, Layer, Move, ParseDiagnostic, ParseResult } from '@/core/types';
 import { LAYER_Z_EPSILON } from '@/core/constants';
 import { tokenizeLine } from './tokenizer';
-import { createInitialState, toMillimeters } from './machineState';
-import { COMMAND_HANDLERS, MOTION_COMMANDS } from './commands';
+import { createInitialState, toMillimeters, type MachineState } from './machineState';
+import { COMMAND_HANDLERS, MODAL_REPEATABLE, MOTION_COMMANDS, getHandler } from './commands';
 import { buildToolpathBuffers } from '../buffers';
 import { computeStats } from '../stats';
 import {
@@ -60,6 +60,16 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
   const dialect = resolveDialect(lines, options.forceDialect);
 
   const emitMove = (move: Move): void => {
+    // Is mili durumu hareketin YAPILDIGI anda onemlidir (program sonundaki
+    // M5 sonradan bayragi kapatir), bu yuzden burada yakalanir.
+    if (
+      state.spindleOffCutLine === null &&
+      !state.spindleOn &&
+      !move.rapid &&
+      move.distance > 0
+    ) {
+      state.spindleOffCutLine = move.lineIndex;
+    }
     moves.push(move);
   };
 
@@ -79,20 +89,29 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
       if (hint) layerHints.push({ lineIndex: i, z: hint.z });
     }
 
-    if (token.commands.length === 0) {
-      // Komutsuz ama parametreli satir: "F3000" gibi modal feedrate atamalari.
-      if (token.params.F !== undefined) {
-        state.feedrate = toMillimeters(token.params.F, state.unit);
-      }
-      continue;
-    }
-
     const ctx = {
       state,
       emitMove,
       diagnostic: (d: Omit<ParseDiagnostic, 'lineIndex'>) =>
         pushDiagnostic({ ...d, lineIndex: i }),
     };
+
+    if (token.commands.length === 0) {
+      // Komutsuz ama parametreli satir: "F3000" gibi modal feedrate atamalari.
+      if (token.params.F !== undefined) {
+        state.feedrate = toMillimeters(token.params.F, state.unit);
+      }
+
+      // MODAL HAREKET: G-code'da hareket komutu kalicidir. "G1 X10 F300"
+      // satirindan sonra gelen "X20 Y5" satiri da bir G1 hareketidir. Gercek
+      // CNC programlari (ozellikle elle yazilanlar ve Fanuc/Heidenhain post
+      // ciktilari) komut sozcugunu tekrar etmez; bu dal olmadan takim
+      // yolunun buyuk bolumu sessizce kaybolurdu.
+      if (hasAxisWord(token) && state.motionMode && MODAL_REPEATABLE.has(state.motionMode)) {
+        dispatch(state.motionMode, token, ctx, pushDiagnostic, i);
+      }
+      continue;
+    }
 
     // Modal komutlar (G90, G21, G17, T0 ...) ayni satirdaki hareket
     // komutundan ONCE uygulanmalidir: "G0 G90 X10" once mutlak moda gecer.
@@ -120,6 +139,8 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
   }
 
   reclassifyCncMoves(moves);
+  checkSemantics(moves, state, diagnostics);
+  diagnostics.sort((a, b) => a.lineIndex - b.lineIndex);
 
   const layers = assignLayers(moves, layerHints);
   const stats: GcodeStats = computeStats(moves, layers, state.dwellSeconds);
@@ -142,6 +163,21 @@ function resolveDialect(lines: string[], forced?: string): Dialect | null {
   return detectDialect(lines.slice(0, DIALECT_SNIFF_LINES));
 }
 
+/** Satirda konum/yay belirten bir harf var mi? (modal hareket tekrari icin) */
+function hasAxisWord(token: ReturnType<typeof tokenizeLine>): boolean {
+  const p = token.params;
+  return (
+    p.X !== undefined ||
+    p.Y !== undefined ||
+    p.Z !== undefined ||
+    p.E !== undefined ||
+    p.I !== undefined ||
+    p.J !== undefined ||
+    p.K !== undefined ||
+    p.R !== undefined
+  );
+}
+
 function dispatch(
   command: string,
   token: ReturnType<typeof tokenizeLine>,
@@ -149,7 +185,7 @@ function dispatch(
   pushDiagnostic: (d: ParseDiagnostic) => void,
   lineIndex: number,
 ): void {
-  const handler = COMMAND_HANDLERS[command];
+  const handler = getHandler(command);
   if (handler) {
     handler(token, ctx);
     return;
@@ -188,6 +224,120 @@ function reclassifyCncMoves(moves: Move[]): void {
     if (move.kind === 'home') continue;
     if (move.distance === 0) continue;
     move.kind = move.rapid ? 'travel' : 'extrude';
+  }
+}
+
+/**
+ * Parse SONRASI anlamsal denetimler.
+ *
+ * Tokenizer/handler seviyesindeki hatalar "bu satir anlasilmadi" der; buradaki
+ * denetimler ise satirlar tek tek dogru olsa bile programin BUTUNUNDE tehlikeli
+ * veya eksik olan seyleri yakalar. Atolyede pahaliya mal olan hatalar
+ * genellikle bu turdendir: birim beyan edilmemistir, is mili calistirilmadan
+ * kesime girilmistir, ya da takim malzemenin icinde hizli hareket etmektedir.
+ */
+function checkSemantics(moves: Move[], state: MachineState, out: ParseDiagnostic[]): void {
+  if (moves.length === 0) {
+    out.push({
+      lineIndex: 0,
+      severity: 'error',
+      code: 'NO_MOTION',
+      message: 'Dosyada hicbir hareket komutu bulunamadi.',
+    });
+    return;
+  }
+
+  const isCnc = !moves.some((m) => m.e !== 0);
+  const cutting = moves.filter((m) => m.kind === 'extrude' && m.distance > 0);
+  const firstCut = cutting[0];
+
+  if (!state.unitsDeclared) {
+    out.push({
+      lineIndex: 0,
+      severity: 'warning',
+      code: 'NO_UNITS',
+      message: 'Birim komutu (G21 mm / G20 inc) yok; milimetre varsayildi.',
+    });
+  }
+
+  if (!state.positioningDeclared) {
+    out.push({
+      lineIndex: 0,
+      severity: 'warning',
+      code: 'NO_POSITIONING_MODE',
+      message: 'Konumlandirma modu (G90 mutlak / G91 artimli) yok; mutlak varsayildi.',
+    });
+  }
+
+  if (isCnc && firstCut && state.spindleOffCutLine !== null) {
+    out.push({
+      lineIndex: state.spindleOffCutLine,
+      severity: 'warning',
+      code: 'SPINDLE_NOT_STARTED',
+      message: 'Is mili calistirilmadan (M3/M4) kesme hareketi yapiliyor.',
+    });
+  }
+
+  const zeroFeed = cutting.find((m) => m.f <= 0);
+  if (zeroFeed) {
+    out.push({
+      lineIndex: zeroFeed.lineIndex,
+      severity: 'warning',
+      code: 'ZERO_FEEDRATE',
+      message: 'Kesme hareketinde ilerleme hizi (F) tanimli degil; tezgah alarm verebilir.',
+    });
+  }
+
+  if (isCnc && cutting.length > 0) {
+    // Malzemenin "ust yuzeyi" olarak kesimin yapildigi en yuksek Z alinir.
+    // Bundan ASAGIDA yapilan hizli (G0) XY hareketi, takimin malzeme icinde
+    // hizli surunmesi demektir: kirilan takimlarin klasik sebebi.
+    let topCutZ = -Infinity;
+    for (const m of cutting) topCutZ = Math.max(topCutZ, m.to.z, m.from.z);
+
+    let firstUnsafe: Move | null = null;
+    let unsafeCount = 0;
+    for (const m of moves) {
+      if (!m.rapid || m.kind === 'home') continue;
+      const movesInXY = Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) > 0.01;
+      if (!movesInXY) continue;
+      if (m.from.z < topCutZ - 1e-6 && m.to.z < topCutZ - 1e-6) {
+        unsafeCount++;
+        if (!firstUnsafe) firstUnsafe = m;
+      }
+    }
+
+    if (firstUnsafe) {
+      out.push({
+        lineIndex: firstUnsafe.lineIndex,
+        severity: 'warning',
+        code: 'RAPID_INSIDE_STOCK',
+        message:
+          `Malzeme seviyesinin altinda hizli (G0) yatay hareket (${unsafeCount} adet). ` +
+          'Takim malzemeye carpabilir; once guvenli Z yuksekligine cikin.',
+      });
+    }
+  }
+
+  if (!isCnc) {
+    const belowBed = moves.find((m) => m.kind === 'extrude' && (m.to.z < 0 || m.from.z < 0));
+    if (belowBed) {
+      out.push({
+        lineIndex: belowBed.lineIndex,
+        severity: 'error',
+        code: 'EXTRUDE_BELOW_BED',
+        message: 'Tabla seviyesinin altinda (Z<0) extrude hareketi var.',
+      });
+    }
+  }
+
+  if (state.cannedCycle) {
+    out.push({
+      lineIndex: moves[moves.length - 1]?.lineIndex ?? 0,
+      severity: 'info',
+      code: 'CYCLE_NOT_CANCELLED',
+      message: 'Delme cevrimi G80 ile iptal edilmeden program bitti.',
+    });
   }
 }
 

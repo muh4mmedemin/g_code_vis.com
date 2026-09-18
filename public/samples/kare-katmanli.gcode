@@ -1,5 +1,6 @@
 ; Ornek: 3 katmanli kare cerceve (FDM)
 ; 20x20mm, katman yuksekligi 0.2mm
+G21
 G90
 M82
 G28

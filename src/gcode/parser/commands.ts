@@ -1,5 +1,5 @@
 import type { GcodeToken } from './tokenizer';
-import type { MachineState } from './machineState';
+import type { CannedCycleState, MachineState } from './machineState';
 import { toMillimeters } from './machineState';
 import type { Move, MoveKind, ParseDiagnostic, Vec3 } from '@/core/types';
 import { estimateMoveDuration } from '../stats';
@@ -59,6 +59,9 @@ function distanceBetween(a: Vec3, b: Vec3): number {
 function linearMove(rapid: boolean): CommandHandler {
   return (token, ctx) => {
   const { state } = ctx;
+  // Hareket komutu modaldir: sonraki komutsuz satirlar bunu tekrarlar.
+  state.motionMode = rapid ? 'G0' : 'G1';
+  state.cannedCycle = null;
   const from: Vec3 = { ...state.position };
 
   const to: Vec3 = {
@@ -97,6 +100,8 @@ function linearMove(rapid: boolean): CommandHandler {
 function handleArcMove(clockwise: boolean): CommandHandler {
   return (token, ctx) => {
     const { state } = ctx;
+    state.motionMode = clockwise ? 'G2' : 'G3';
+    state.cannedCycle = null;
     const from: Vec3 = { ...state.position };
 
     const to: Vec3 = {
@@ -124,9 +129,27 @@ function handleArcMove(clockwise: boolean): CommandHandler {
             k: token.params.K !== undefined ? toMillimeters(token.params.K, state.unit) : undefined,
           }
         : undefined,
+      offsetMode: state.arcDistanceMode,
       radius:
         token.params.R !== undefined ? toMillimeters(token.params.R, state.unit) : undefined,
     });
+
+    if (arc) {
+      // Kontrol uniteleri, baslangic ve bitis yaricapi tutmadiginda alarm
+      // verir. Biz yayi baslangic yaricapiyla cizip kullaniciyi uyaririz:
+      // sessizce bozuk bir yay cizmek, hatayi gorunmez kilar.
+      const tolerance = Math.max(0.01, arc.radiusStart * 0.001);
+      if (Math.abs(arc.radiusStart - arc.radiusEnd) > tolerance) {
+        ctx.diagnostic({
+          severity: 'warning',
+          code: 'ARC_RADIUS_MISMATCH',
+          message:
+            `Yay yaricapi tutarsiz: baslangicta ${arc.radiusStart.toFixed(3)} mm, ` +
+            `bitiste ${arc.radiusEnd.toFixed(3)} mm. I/J/K degerlerini kontrol edin ` +
+            '(tezgah bu satirda alarm verebilir).',
+        });
+      }
+    }
 
     const { newE, delta: totalDeltaE } = resolveExtrusion(token, state);
     state.e = newE;
@@ -218,12 +241,14 @@ function handleHome(token: GcodeToken, ctx: HandlerContext): void {
 
 function handleAbsolutePositioning(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.positioning = 'absolute';
+  ctx.state.positioningDeclared = true;
   // M82/M83 gorulmediyse E ekseni de G90/G91'i izler (Marlin/RRF davranisi).
   if (!ctx.state.eModeExplicit) ctx.state.ePositioning = 'absolute';
 }
 
 function handleRelativePositioning(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.positioning = 'relative';
+  ctx.state.positioningDeclared = true;
   if (!ctx.state.eModeExplicit) ctx.state.ePositioning = 'relative';
 }
 
@@ -254,10 +279,12 @@ function handleDwell(token: GcodeToken, ctx: HandlerContext): void {
 
 function handleUnitsMm(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.unit = 'mm';
+  ctx.state.unitsDeclared = true;
 }
 
 function handleUnitsInch(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.unit = 'inch';
+  ctx.state.unitsDeclared = true;
 }
 
 function handleEAbsolute(_token: GcodeToken, ctx: HandlerContext): void {
@@ -284,6 +311,185 @@ function handleToolChange(token: GcodeToken, ctx: HandlerContext): void {
   if (Number.isFinite(index)) ctx.state.tool = index;
 }
 
+/**
+ * M6 — takim degisimi (CNC).
+ *
+ * NEDEN AYRI: CNC post-processor'lari takimi cogunlukla "M6 T1" sirasiyla
+ * yazar. Bu bicimde T ilk sozcuk olmadigi icin tokenizer onu komut degil
+ * parametre sayar; takim numarasi buradan okunur. "T1 M6" bicimi ise
+ * handleToolChange tarafindan zaten karsilanir.
+ */
+function handleToolChangeM6(token: GcodeToken, ctx: HandlerContext): void {
+  if (token.params.T === undefined) return;
+  const index = token.params.T;
+  if (Number.isFinite(index)) ctx.state.tool = index;
+}
+
+function handleSpindleOn(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.spindleOn = true;
+}
+
+function handleSpindleOff(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.spindleOn = false;
+}
+
+/** G90.1 / G91.1 — yay merkezinin (I/J/K) mutlak mi ofset mi oldugu. */
+function setArcDistanceMode(mode: MachineState['arcDistanceMode']): CommandHandler {
+  return (_token, ctx) => {
+    ctx.state.arcDistanceMode = mode;
+  };
+}
+
+/** G98/G99 — delme cevrimi sonrasi donulecek duzlem. */
+function setRetractMode(mode: MachineState['retractMode']): CommandHandler {
+  return (_token, ctx) => {
+    ctx.state.retractMode = mode;
+  };
+}
+
+/** G80 — aktif delme cevrimini iptal eder. */
+function handleCancelCycle(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.cannedCycle = null;
+  // Cevrim iptal edildikten sonra yeni bir hareket komutu gelene kadar
+  // modal hareket yoktur (aksi halde sonraki X/Y satirlari delik delmeye
+  // devam ederdi).
+  ctx.state.motionMode = null;
+}
+
+/**
+ * Delme cevrimleri (canned cycles): G81, G82, G83, G73, G85, G86, G89.
+ *
+ * NEDEN ONEMLI: Gercek CNC programlarinda vida/pim delikleri neredeyse her
+ * zaman bu cevrimlerle delinir. Cevrim tek satirdir ("G83 X10 Y20 Z-15 R2
+ * Q3 F120") ama tezgahta ONLARCA hareket uretir. Bu kodlar desteklenmezse
+ * delikler ne cizilir ne de simulasyonda malzemeden talas kaldirir.
+ *
+ * Cevrim MODAL'dir: kendisinden sonraki her X/Y satiri ayni delmeyi yeni
+ * koordinatta tekrarlar; G80 iptal eder.
+ */
+function cannedCycle(command: string): CommandHandler {
+  return (token, ctx) => {
+    const { state } = ctx;
+    const prev = state.cannedCycle;
+    const relative = state.positioning === 'relative';
+
+    const x = resolveAxis(token.params.X, state.position.x, state.positioning, state.unit);
+    const y = resolveAxis(token.params.Y, state.position.y, state.positioning, state.unit);
+
+    if (token.params.F !== undefined) {
+      state.feedrate = toMillimeters(token.params.F, state.unit);
+    }
+
+    // Cevrim baslamadan onceki Z (G98'de buraya donulur) yalnizca cevrimin
+    // ILK satirinda belirlenir; tekrarlarda korunur.
+    const initialZ = prev ? prev.initialZ : state.position.z;
+
+    const rParam =
+      token.params.R !== undefined ? toMillimeters(token.params.R, state.unit) : undefined;
+    const r = rParam !== undefined ? (relative ? state.position.z + rParam : rParam) : prev?.r;
+
+    const zParam =
+      token.params.Z !== undefined ? toMillimeters(token.params.Z, state.unit) : undefined;
+    // G91'de Z, R duzleminden itibaren olculur (Fanuc/LinuxCNC davranisi).
+    const zBottom =
+      zParam !== undefined ? (relative ? (r ?? state.position.z) + zParam : zParam) : prev?.z;
+
+    if (r === undefined || zBottom === undefined) {
+      ctx.diagnostic({
+        severity: 'error',
+        code: 'CANNED_CYCLE_INCOMPLETE',
+        message: `${command} cevrimi eksik: R (guvenlik duzlemi) ve Z (delik dibi) gerekli.`,
+      });
+      return;
+    }
+
+    const qRaw = token.params.Q !== undefined ? toMillimeters(token.params.Q, state.unit) : undefined;
+    const q = Math.abs(qRaw ?? prev?.q ?? 0);
+    const dwell = token.params.P ?? prev?.dwell ?? 0;
+
+    const needsPeck = command === 'G83' || command === 'G73';
+    if (needsPeck && q <= 0) {
+      ctx.diagnostic({
+        severity: 'warning',
+        code: 'CANNED_CYCLE_NO_Q',
+        message: `${command} gagalama adimi (Q) verilmemis; tek pasoda delindi.`,
+      });
+    }
+
+    if (zBottom > r) {
+      ctx.diagnostic({
+        severity: 'warning',
+        code: 'CANNED_CYCLE_Z_ABOVE_R',
+        message: `${command}: delik dibi (Z${zBottom}) guvenlik duzleminin (R${r}) ustunde; delme olusmaz.`,
+      });
+    }
+
+    const step = (to: Vec3, rapid: boolean): void => {
+      const from: Vec3 = { ...state.position };
+      const distance = distanceBetween(from, to);
+      state.position = { ...to };
+      if (distance === 0) return;
+      ctx.emitMove({
+        lineIndex: token.lineIndex,
+        kind: rapid ? 'travel' : 'extrude',
+        from,
+        to: { ...to },
+        e: 0,
+        f: state.feedrate,
+        layerIndex: 0,
+        tool: state.tool,
+        rapid,
+        distance,
+        duration: estimateMoveDuration(distance, state.feedrate),
+      });
+    };
+
+    // 1) Guvenli yukseklige cik (takim R duzleminin altindaysa) ve XY'ye git.
+    if (state.position.z < r) step({ x: state.position.x, y: state.position.y, z: r }, true);
+    step({ x, y, z: state.position.z }, true);
+    // 2) R duzlemine hizli in.
+    step({ x, y, z: r }, true);
+
+    // 3) Delme.
+    if (needsPeck && q > 0) {
+      let depth = r;
+      while (depth > zBottom + 1e-9) {
+        const next = Math.max(zBottom, depth - q);
+        step({ x, y, z: next }, false);
+        if (next <= zBottom + 1e-9) break;
+        if (command === 'G83') {
+          // Tam geri cekilme: talas bosaltma.
+          step({ x, y, z: r }, true);
+          // Bir onceki derinligin hemen ustune hizli don.
+          step({ x, y, z: Math.min(r, next + 0.5) }, true);
+        } else {
+          // G73: yalnizca talas kirma icin kisa geri cekilme.
+          step({ x, y, z: Math.min(r, next + Math.min(q, 1)) }, true);
+        }
+        depth = next;
+      }
+    } else {
+      step({ x, y, z: zBottom }, false);
+    }
+
+    // 4) Dipte bekleme (G82/G89). P saniye kabul edilir (LinuxCNC davranisi).
+    if ((command === 'G82' || command === 'G89') && dwell > 0) {
+      state.dwellSeconds += dwell;
+    }
+
+    // 5) Geri cekilme. G85/G89 isleme feed'iyle cikar (raybalama/bore).
+    const feedOut = command === 'G85' || command === 'G89';
+    step({ x, y, z: r }, !feedOut);
+    if (state.retractMode === 'initial' && initialZ > r) {
+      step({ x, y, z: initialZ }, true);
+    }
+
+    const cycleState: CannedCycleState = { command, z: zBottom, r, q, dwell, initialZ };
+    state.cannedCycle = cycleState;
+    state.motionMode = command;
+  };
+}
+
 function noop(): void {}
 
 /**
@@ -299,11 +505,28 @@ const IGNORED_COMMANDS = [
   // Program akisi
   'M0', 'M1', 'M2', 'M30', 'M108', 'M110',
   // CNC: is mili / sogutma / program
-  'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9',
+  'M7', 'M8', 'M9',
   // Is koordinat sistemleri ve telafi (geometriyi kabaca etkilemez)
   'G53', 'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
-  'G40', 'G43', 'G49', 'G61', 'G64', 'G80', 'G94', 'G95',
+  'G40', 'G43', 'G49', 'G61', 'G64', 'G94', 'G95',
 ] as const;
+
+/**
+ * G41/G42 — kesici yaricap telafisi.
+ *
+ * Tezgah, programlanan hattin SAGINA/SOLUNA takim yaricapi kadar kayar. Bu
+ * kaymayi simule etmiyoruz (takim merkez hatti cizilir), ama sessiz kalmak
+ * yaniltici olur: parcanin gercekte 1 takim yaricapi daha buyuk/kucuk
+ * cikacagini kullanici bilmeli.
+ */
+function handleCutterComp(token: GcodeToken, ctx: HandlerContext): void {
+  const which = token.commands.find((c) => c === 'G41' || c === 'G42') ?? 'G41';
+  ctx.diagnostic({
+    severity: 'info',
+    code: 'CUTTER_COMP_IGNORED',
+    message: `${which} kesici telafisi uygulanmadi; takim merkez hatti gosteriliyor.`,
+  });
+}
 
 export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   // Hareket
@@ -324,6 +547,25 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   G19: setPlane('YZ'),
   M82: handleEAbsolute,
   M83: handleERelative,
+  'G90.1': setArcDistanceMode('absolute'),
+  'G91.1': setArcDistanceMode('incremental'),
+  // CNC: is mili ve delme cevrimleri
+  M3: handleSpindleOn,
+  M4: handleSpindleOn,
+  M5: handleSpindleOff,
+  M6: handleToolChangeM6,
+  G41: handleCutterComp,
+  G42: handleCutterComp,
+  G98: setRetractMode('initial'),
+  G99: setRetractMode('rPlane'),
+  G80: handleCancelCycle,
+  G81: cannedCycle('G81'),
+  G82: cannedCycle('G82'),
+  G83: cannedCycle('G83'),
+  G73: cannedCycle('G73'),
+  G85: cannedCycle('G85'),
+  G86: cannedCycle('G86'),
+  G89: cannedCycle('G89'),
   // Takim degisimi (T0..T9)
   ...Object.fromEntries(
     Array.from({ length: 10 }, (_, i) => [`T${i}`, handleToolChange as CommandHandler]),
@@ -333,7 +575,35 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 };
 
 /**
+ * Bir komut sozcugu icin handler bulur.
+ *
+ * Dogrudan eslesme disinda T komutlari genel olarak karsilanir: bir tezgahta
+ * takim numarasi 9'dan buyuk olabilir (T12, T101), bunlarin her birini tek tek
+ * kaydetmek anlamsizdir.
+ */
+export function getHandler(command: string): CommandHandler | undefined {
+  const direct = COMMAND_HANDLERS[command];
+  if (direct) return direct;
+  if (/^T\d+$/.test(command)) return handleToolChange;
+  return undefined;
+}
+
+/**
  * Hareket/konum uretin komutlar. Ayni satirda modal komutlarla birlikte
  * gelebilirler ("G0 G90 X10"); modal olanlar ONCE uygulanmalidir.
  */
-export const MOTION_COMMANDS = new Set(['G0', 'G1', 'G2', 'G3', 'G28', 'G92', 'G4']);
+export const MOTION_COMMANDS = new Set([
+  'G0', 'G1', 'G2', 'G3', 'G28', 'G92', 'G4',
+  // Delme cevrimleri de hareket uretir: ayni satirdaki G98/G99, G90/G91,
+  // takim ve duzlem komutlari onlardan ONCE uygulanmalidir.
+  'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
+]);
+
+/**
+ * Komut sozcugu icermeyen bir satirda tekrarlanabilen (modal) hareketler.
+ * Ornek: "G1 X10 F200" satirindan sonra gelen "X20" satiri yine G1'dir.
+ */
+export const MODAL_REPEATABLE = new Set([
+  'G0', 'G1', 'G2', 'G3',
+  'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
+]);

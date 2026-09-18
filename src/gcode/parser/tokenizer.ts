@@ -8,7 +8,14 @@
  *   -> { commands: ['G1'], params: { X: 10.5, Y: 2, E: 0.04 }, comment: 'wall-outer' }
  */
 
-export type ParamLetter = 'X' | 'Y' | 'Z' | 'E' | 'F' | 'I' | 'J' | 'K' | 'R' | 'S' | 'P' | 'T';
+export type ParamLetter =
+  | 'X' | 'Y' | 'Z' | 'E' | 'F'
+  | 'I' | 'J' | 'K' | 'R'
+  | 'S' | 'P' | 'T'
+  /** Delme cevrimlerinde gagalama adimi (G83/G73). */
+  | 'Q'
+  /** Tekrar sayisi (delme cevrimleri, alt program cagrilari). */
+  | 'L';
 
 export interface GcodeToken {
   /**
@@ -30,7 +37,7 @@ export interface GcodeToken {
   lineIndex: number;
 }
 
-const PARAM_LETTERS = 'XYZEFIJKRSPT';
+const PARAM_LETTERS = 'XYZEFIJKRSPTQL';
 
 /**
  * Harf + (opsiyonel) sayi ciftleri.
