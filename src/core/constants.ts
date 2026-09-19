@@ -1,11 +1,54 @@
-import type { BuildVolume, StockDefinition, ToolDefinition, ViewSettings } from './types';
+import type {
+  BuildVolume,
+  StockDefinition,
+  StockMaterialId,
+  ToolDefinition,
+  ViewSettings,
+} from './types';
 
 export const DEFAULT_BUILD_VOLUME: BuildVolume = { width: 220, depth: 220, height: 250 };
+
+/**
+ * Secilebilir ham malzemeler.
+ *
+ * `color` sahnedeki blogun rengi, `roughness`/`metalness` ise yuzey cinsi:
+ * derlin mat plastiktir (pürüzlü, metalik degil), aluminyum ve pirinc ise
+ * isigi metal gibi yansitir.
+ */
+export interface StockMaterial {
+  id: StockMaterialId;
+  label: string;
+  color: number;
+  roughness: number;
+  metalness: number;
+}
+
+export const STOCK_MATERIALS: StockMaterial[] = [
+  { id: 'derlin-dogal', label: 'Derlin (dogal)', color: 0xe8e3d8, roughness: 0.85, metalness: 0.02 },
+  { id: 'derlin-mavi', label: 'Derlin (mavi)', color: 0x2f6fd0, roughness: 0.8, metalness: 0.02 },
+  { id: 'derlin-kirmizi', label: 'Derlin (kirmizi)', color: 0xc0392b, roughness: 0.8, metalness: 0.02 },
+  { id: 'derlin-siyah', label: 'Derlin (siyah)', color: 0x2b2f36, roughness: 0.78, metalness: 0.03 },
+  { id: 'derlin-yesil', label: 'Derlin (yesil)', color: 0x2e8b57, roughness: 0.8, metalness: 0.02 },
+  { id: 'aluminyum', label: 'Aluminyum', color: 0xb8bec6, roughness: 0.35, metalness: 0.75 },
+  { id: 'pirinc', label: 'Pirinc', color: 0xc9a227, roughness: 0.4, metalness: 0.7 },
+];
+
+export const DEFAULT_STOCK_MATERIAL: StockMaterialId = 'derlin-dogal';
+
+/** Id'den malzeme tanimi; bilinmeyen id'de varsayilana duser. */
+export function getStockMaterial(id: StockMaterialId | undefined): StockMaterial {
+  return (
+    STOCK_MATERIALS.find((m) => m.id === id) ??
+    STOCK_MATERIALS.find((m) => m.id === DEFAULT_STOCK_MATERIAL) ??
+    (STOCK_MATERIALS[0] as StockMaterial)
+  );
+}
 
 export const DEFAULT_STOCK: StockDefinition = {
   shape: 'box',
   size: { x: 100, y: 100, z: 30 },
   origin: { x: 0, y: 0, z: 0 },
+  material: DEFAULT_STOCK_MATERIAL,
 };
 
 export const DEFAULT_TOOL: ToolDefinition = { type: 'flat', diameter: 6, fluteLength: 25 };

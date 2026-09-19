@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LayerContext, PlaybackFrame, SceneLayer } from '@/viewer/core/SceneLayer';
 import type { Move, ParseResult, StockDefinition, ToolDefinition } from '@/core/types';
-import { COLORS } from '@/core/constants';
+import { getStockMaterial } from '@/core/constants';
 import { VoxelGrid } from './VoxelGrid';
 import { carveRange } from './carver';
 import { meshChunk } from './mesher';
@@ -43,10 +43,11 @@ export class StockLayer implements SceneLayer {
     this.ctx = ctx;
     this.group = new THREE.Group();
     this.group.visible = false;
+    const defaultMaterial = getStockMaterial(undefined);
     this.material = new THREE.MeshStandardMaterial({
-      color: COLORS.stock,
-      metalness: 0.05,
-      roughness: 0.85,
+      color: defaultMaterial.color,
+      metalness: defaultMaterial.metalness,
+      roughness: defaultMaterial.roughness,
       // Blogun ic yuzeyleri (cep duvarlari) de dogru gorunsun.
       side: THREE.FrontSide,
     });
@@ -58,6 +59,7 @@ export class StockLayer implements SceneLayer {
     this.stock = stock;
     this.tool = tool;
     this.resolution = resolution;
+    this.applyMaterial(stock);
 
     this.grid = VoxelGrid.fromStock(stock, resolution);
     this.grid.fill();
@@ -67,6 +69,19 @@ export class StockLayer implements SceneLayer {
     this.recarveFromStart(this.carveTarget());
     this.updateDirtyChunks();
     this.ctx?.requestRender();
+  }
+
+  /**
+   * Blogun malzemesini uygular. Voxel verisi degismez — yalnizca yuzeyin
+   * rengi ve cinsi degisir, bu yuzden mesh'leri yeniden kurmaya gerek yoktur.
+   */
+  private applyMaterial(stock: StockDefinition): void {
+    if (!this.material) return;
+    const material = getStockMaterial(stock.material);
+    this.material.color.setHex(material.color);
+    this.material.roughness = material.roughness;
+    this.material.metalness = material.metalness;
+    this.material.needsUpdate = true;
   }
 
   setVisible(visible: boolean): void {
