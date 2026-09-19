@@ -9,6 +9,7 @@ const STOCK: StockDefinition = {
   shape: 'box',
   size: { x: 40, y: 50, z: 70 },
   origin: { x: 0, y: 0, z: 0 },
+  material: 'derlin-dogal',
 };
 
 const TOOL: ToolDefinition = { type: 'flat', diameter: 6, fluteLength: 25 };
@@ -280,6 +281,7 @@ describe('holder-konnektor ornegi', () => {
     shape: 'box',
     size: { x: 45, y: 60, z: 80 },
     origin: { x: 0, y: 0, z: 0 },
+    material: 'derlin-mavi',
   };
 
   const carved = (() => {

@@ -533,6 +533,45 @@ body {
   border-color: var(--accent);
 }
 
+.job-form__field select {
+  width: 100%;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 5px;
+  font-size: 12px;
+}
+
+.job-form__field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.job-form__field--wide {
+  flex: none;
+}
+
+.material-swatches {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.material-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+}
+
+.material-swatch.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(255, 138, 43, 0.35);
+}
+
 .job-form__submit {
   background: var(--accent);
   border: none;

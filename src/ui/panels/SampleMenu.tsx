@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '@/state/store';
-import type { MachineMode, StockDefinition, Vec3 } from '@/core/types';
+import type { MachineMode, StockDefinition, StockMaterialId, Vec3 } from '@/core/types';
 
 interface SampleEntry {
   label: string;
@@ -12,7 +12,7 @@ interface SampleEntry {
    * CNC ornekleri icin ham blok: ornek secildiginde bu olculerde TAM DOLU
    * bir blok kurulur ve program onu isler.
    */
-  stock?: { size: Vec3; origin: Vec3; toolDiameter: number };
+  stock?: { size: Vec3; origin: Vec3; toolDiameter: number; material: StockMaterialId };
 }
 
 const SAMPLES: SampleEntry[] = [
@@ -49,6 +49,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 40, y: 50, z: 70 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6,
+      material: 'derlin-mavi',
     },
   },
   {
@@ -60,6 +61,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 45, y: 60, z: 80 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6,
+      material: 'derlin-kirmizi',
     },
   },
   {
@@ -71,6 +73,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 100, y: 80, z: 12 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6,
+      material: 'aluminyum',
     },
   },
   {
@@ -82,6 +85,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 80, y: 60, z: 15 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6,
+      material: 'aluminyum',
     },
   },
   {
@@ -93,6 +97,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 70, y: 70, z: 20 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6,
+      material: 'derlin-yesil',
     },
   },
   {
@@ -104,6 +109,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 76.2, y: 50.8, z: 12.7 },
       origin: { x: 0, y: 0, z: 0 },
       toolDiameter: 6.35,
+      material: 'aluminyum',
     },
   },
   {
@@ -115,6 +121,7 @@ const SAMPLES: SampleEntry[] = [
       size: { x: 70, y: 50, z: 20 },
       origin: { x: 30, y: 20, z: 0 },
       toolDiameter: 6,
+      material: 'derlin-dogal',
     },
   },
 ];
@@ -140,6 +147,7 @@ export function SampleMenu() {
         shape: 'box',
         size: sample.stock.size,
         origin: sample.stock.origin,
+        material: sample.stock.material,
       };
       setStock(stock);
     }

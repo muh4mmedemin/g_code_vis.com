@@ -155,12 +155,30 @@ export interface BuildVolume {
   height: number; // Z (mm)
 }
 
+/**
+ * Ham blogun malzeme cinsi.
+ *
+ * Atolyede blok testereden hangi cubuktan kesildiyse rengi de odur; holder
+ * uretiminde mavi/kirmizi derlin gibi renkler siparise gore degisir. Secim
+ * yalnizca gorunumu etkiler, kesim davranisini degil.
+ */
+export type StockMaterialId =
+  | 'derlin-dogal'
+  | 'derlin-mavi'
+  | 'derlin-kirmizi'
+  | 'derlin-siyah'
+  | 'derlin-yesil'
+  | 'aluminyum'
+  | 'pirinc';
+
 /** CNC modu icin ham malzeme blogu tanimi (Faz 6). */
 export interface StockDefinition {
   shape: 'box' | 'cylinder';
   size: Vec3;
   /** Blogun sahne origin'ine gore konumu. */
   origin: Vec3;
+  /** Blogun malzemesi (renk/yuzey gorunumu). */
+  material: StockMaterialId;
 }
 
 /** CNC kesici takim tanimi (Faz 6). */

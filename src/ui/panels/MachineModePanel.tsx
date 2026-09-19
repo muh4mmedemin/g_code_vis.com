@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '@/state/store';
+import { DEFAULT_STOCK_MATERIAL, STOCK_MATERIALS } from '@/core/constants';
+import type { StockMaterialId } from '@/core/types';
 
 /**
  * CNC modunda ham malzeme (stok) blogu paneli.
@@ -62,6 +64,7 @@ export function MachineModePanel() {
 
   const [form, setForm] = useState<BlockForm>(DEFAULT_FORM);
   const [originMode, setOriginMode] = useState<OriginMode>('center');
+  const [material, setMaterial] = useState<StockMaterialId>(DEFAULT_STOCK_MATERIAL);
 
   // Blok disaridan da kurulabilir (ornegin "Ornekler" menusunden bir CNC
   // programi secildiginde). O durumda alanlarin eski degerleri gostermesi
@@ -76,6 +79,7 @@ export function MachineModePanel() {
       resolution: voxelResolution,
     });
     setOriginMode(stock.origin.x === 0 && stock.origin.y === 0 ? 'center' : 'corner');
+    setMaterial(stock.material);
   }, [stock, toolDiameter, voxelResolution]);
 
   if (mode !== 'cnc') return null;
@@ -109,7 +113,7 @@ export function MachineModePanel() {
     pause();
     seekToMove(0);
     // Stok en son ayarlanir: viewer bunu blogu yeniden kurma sinyali sayar.
-    setStock({ shape: 'box', size, origin });
+    setStock({ shape: 'box', size, origin, material });
   };
 
   const field = (key: keyof BlockForm, label: string) => (
@@ -139,6 +143,37 @@ export function MachineModePanel() {
       <div className="job-form__row">
         {field('toolDiameter', 'Takim capi')}
         {field('resolution', 'Cozunurluk')}
+      </div>
+
+      <label className="job-form__field job-form__field--wide">
+        <span>Malzeme</span>
+        <select
+          value={material}
+          onChange={(e) => setMaterial(e.target.value as StockMaterialId)}
+        >
+          {STOCK_MATERIALS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="material-swatches">
+        {STOCK_MATERIALS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            title={option.label}
+            aria-label={option.label}
+            aria-pressed={material === option.id}
+            className={
+              material === option.id ? 'material-swatch is-active' : 'material-swatch'
+            }
+            style={{ background: `#${option.color.toString(16).padStart(6, '0')}` }}
+            onClick={() => setMaterial(option.id)}
+          />
+        ))}
       </div>
 
       <div className="job-form__row job-form__row--origin">
