@@ -143,6 +143,15 @@ body {
   right: 10px;
   flex-direction: column;
   width: 210px;
+  /* Paneller ust uste bindiginde kisa ekranlarda tasmasin: alt panel
+     (istatistikler) kesilmek yerine yigin kaydirilabilir olur. */
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.overlay-slot--top-right > * {
+  flex-shrink: 0;
 }
 
 .overlay-slot--right {
@@ -491,6 +500,48 @@ body {
 }
 
 /* --- CNC is parcasi formu --------------------------------------------------- */
+.panel--stats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 190px;
+}
+
+.stats__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.stats__label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.stats__value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.stats__value--error {
+  color: #ff6b6b;
+}
+
+.stats__divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+}
+
+.stats__empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .panel--machine-mode {
   display: flex;
   flex-direction: column;
