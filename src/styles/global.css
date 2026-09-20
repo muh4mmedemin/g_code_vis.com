@@ -550,6 +550,69 @@ body {
   color: var(--text-dim);
 }
 
+.panel--measure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.measure__toggle {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.measure__toggle.is-active {
+  background: var(--accent-alt);
+  border-color: var(--accent-alt);
+  color: #06121f;
+  font-weight: 600;
+}
+
+.measure__hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+.measure__result {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent-alt);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure__axes {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure__clear {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.tool-form__hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
 .panel--machine-mode {
   display: flex;
   flex-direction: column;

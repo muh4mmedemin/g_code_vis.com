@@ -5,6 +5,7 @@ import { BuildVolumeLayer } from './layers/BuildVolumeLayer';
 import { ToolpathLayer } from './layers/ToolpathLayer';
 import { SolidPrintLayer } from './layers/SolidPrintLayer';
 import { ToolHeadLayer } from './layers/ToolHeadLayer';
+import { MeasureLayer } from './layers/MeasureLayer';
 import { StockLayer } from '@/cnc/StockLayer';
 import { useStore } from '@/state/store';
 
@@ -36,6 +37,7 @@ export function Viewport() {
     const solidPrintLayer = new SolidPrintLayer();
     const toolHeadLayer = new ToolHeadLayer();
     const stockLayer = new StockLayer();
+    const measureLayer = new MeasureLayer();
     /**
      * Kadraj: CNC modunda ham blok toolpath'ten cok daha buyuk olabilir
      * (ornegin 40x50x70 blokta 24x16 bir cep). Yalnizca toolpath'e gore
@@ -84,6 +86,7 @@ export function Viewport() {
     manager.addLayer(solidPrintLayer);
     manager.addLayer(toolHeadLayer);
     manager.addLayer(stockLayer);
+    manager.addLayer(measureLayer);
 
     // store -> SceneManager: tek yonlu kopru. Sadece ilgili dilim degistiginde tetiklenir.
     const unsubData = useStore.subscribe((state, prev) => {
@@ -132,9 +135,13 @@ export function Viewport() {
           bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : [0, 0, 0],
         );
       }
+      if (state.tool !== prev.tool) {
+        toolHeadLayer.setTool(state.tool);
+      }
       if (state.mode !== prev.mode) {
         stockLayer.setVisible(state.mode === 'cnc');
         solidPrintLayer.setMachineMode(state.mode);
+        toolHeadLayer.setMachineMode(state.mode);
         // Kadraj moda gore degisir (CNC'de blok da hesaba katilir); yeniden
         // cerceveleme yapilmazsa mod degistiren kullanici bos bir sahne gorur.
         const bounds = state.parseResult?.stats.bounds;
@@ -149,6 +156,35 @@ export function Viewport() {
     manager.broadcastViewSettings(useStore.getState().view);
     stockLayer.setVisible(useStore.getState().mode === 'cnc');
     solidPrintLayer.setMachineMode(useStore.getState().mode);
+    toolHeadLayer.setMachineMode(useStore.getState().mode);
+    toolHeadLayer.setTool(useStore.getState().tool);
+
+    // --- Olcum araci ---------------------------------------------------------
+    // Tiklama hem kamerayi dondurmek hem nokta secmek icin kullanilir; ayrimi
+    // surukleme mesafesi yapar: yerinde birakilan tiklama olcumdur.
+    const unsubMeasure = useStore.subscribe((state, prev) => {
+      if (state.measurePoints !== prev.measurePoints) {
+        measureLayer.setPoints(state.measurePoints);
+      }
+    });
+
+    let pointerDownAt: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      pointerDownAt = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const start = pointerDownAt;
+      pointerDownAt = null;
+      if (!start || !useStore.getState().measureActive) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+
+      const point = manager.pickPoint(event.clientX, event.clientY);
+      if (point) {
+        useStore.getState().addMeasurePoint({ x: point.x, y: point.y, z: point.z });
+      }
+    };
+    manager.canvas.addEventListener('pointerdown', onPointerDown);
+    manager.canvas.addEventListener('pointerup', onPointerUp);
 
     // --- Simulasyon/oynatma dongusu (Faz 3) ---------------------------------
     // isPlaying acikken moveCursor'u gercek zamana gore ilerletir. Store'un
@@ -190,6 +226,9 @@ export function Viewport() {
       unsubVolume();
       unsubProgress();
       unsubStock();
+      unsubMeasure();
+      manager.canvas.removeEventListener('pointerdown', onPointerDown);
+      manager.canvas.removeEventListener('pointerup', onPointerUp);
       manager.dispose();
     };
   }, []);

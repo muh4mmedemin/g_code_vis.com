@@ -487,11 +487,15 @@ function checkSemantics(moves: Move[], state: MachineState, out: ParseDiagnostic
   }
 
   if (isCnc && cutting.length > 0) {
-    // Malzemenin "ust yuzeyi" olarak kesimin yapildigi en yuksek Z alinir.
-    // Bundan ASAGIDA yapilan hizli (G0) XY hareketi, takimin malzeme icinde
-    // hizli surunmesi demektir: kirilan takimlarin klasik sebebi.
+    // Malzemenin ust yuzeyi: her kesme hareketinin ULASTIGI derinliklerin
+    // (yani uclarinin dusugunun) en yuksegi.
+    //
+    // Hareketin YUKARI ucuna bakmak yanlis olurdu: guvenli yukseklikten
+    // yapilan her dalis (G0 Z5 -> G1 Z-3) o yuksekligi "kesim seviyesi"
+    // sanip, parcanin ustunden gecen normal hizli hareketleri tehlikeli
+    // gosterirdi.
     let topCutZ = -Infinity;
-    for (const m of cutting) topCutZ = Math.max(topCutZ, m.to.z, m.from.z);
+    for (const m of cutting) topCutZ = Math.max(topCutZ, Math.min(m.to.z, m.from.z));
 
     let firstUnsafe: Move | null = null;
     let unsafeCount = 0;
@@ -499,7 +503,7 @@ function checkSemantics(moves: Move[], state: MachineState, out: ParseDiagnostic
       if (!m.rapid || m.kind === 'home') continue;
       const movesInXY = Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) > 0.01;
       if (!movesInXY) continue;
-      if (m.from.z < topCutZ - 1e-6 && m.to.z < topCutZ - 1e-6) {
+      if (m.from.z <= topCutZ + 1e-6 && m.to.z <= topCutZ + 1e-6) {
         unsafeCount++;
         if (!firstUnsafe) firstUnsafe = m;
       }

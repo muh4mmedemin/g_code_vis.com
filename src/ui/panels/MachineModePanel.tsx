@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '@/state/store';
-import { DEFAULT_STOCK_MATERIAL, STOCK_MATERIALS } from '@/core/constants';
-import type { StockMaterialId } from '@/core/types';
+import {
+  DEFAULT_STOCK_MATERIAL,
+  STOCK_MATERIALS,
+  TOOL_TYPES,
+  getToolTypeInfo,
+} from '@/core/constants';
+import type { StockMaterialId, ToolType } from '@/core/types';
 
 /**
  * CNC modunda ham malzeme (stok) blogu paneli.
@@ -59,12 +64,17 @@ export function MachineModePanel() {
   const pause = useStore((s) => s.pause);
 
   const stock = useStore((s) => s.stock);
-  const toolDiameter = useStore((s) => s.tool.diameter);
+  const tool = useStore((s) => s.tool);
+  const toolDiameter = tool.diameter;
   const voxelResolution = useStore((s) => s.voxelResolution);
 
   const [form, setForm] = useState<BlockForm>(DEFAULT_FORM);
   const [originMode, setOriginMode] = useState<OriginMode>('center');
   const [material, setMaterial] = useState<StockMaterialId>(DEFAULT_STOCK_MATERIAL);
+  const [toolType, setToolType] = useState<ToolType>('flat');
+  const [angle, setAngle] = useState(118);
+  const [cornerRadius, setCornerRadius] = useState(1);
+  const [tipDiameter, setTipDiameter] = useState(1);
 
   // Blok disaridan da kurulabilir (ornegin "Ornekler" menusunden bir CNC
   // programi secildiginde). O durumda alanlarin eski degerleri gostermesi
@@ -80,13 +90,31 @@ export function MachineModePanel() {
     });
     setOriginMode(stock.origin.x === 0 && stock.origin.y === 0 ? 'center' : 'corner');
     setMaterial(stock.material);
-  }, [stock, toolDiameter, voxelResolution]);
+    setToolType(tool.type);
+    if (tool.angle !== undefined) setAngle(tool.angle);
+    if (tool.cornerRadius !== undefined) setCornerRadius(tool.cornerRadius);
+    if (tool.tipDiameter !== undefined) setTipDiameter(tool.tipDiameter);
+  }, [stock, tool, toolDiameter, voxelResolution]);
 
   if (mode !== 'cnc') return null;
 
   const update = (key: keyof BlockForm, raw: string) => {
     const value = Number(raw);
     setForm((prev) => ({ ...prev, [key]: Number.isFinite(value) ? value : prev[key] }));
+  };
+
+  const info = getToolTypeInfo(toolType);
+
+  /** Takim tipi degisince o tipin tipik degerlerini forma doldur. */
+  const changeToolType = (next: ToolType) => {
+    setToolType(next);
+    const defaults = getToolTypeInfo(next).defaults;
+    if (defaults.diameter !== undefined) {
+      setForm((prev) => ({ ...prev, toolDiameter: defaults.diameter as number }));
+    }
+    if (defaults.angle !== undefined) setAngle(defaults.angle);
+    if (defaults.cornerRadius !== undefined) setCornerRadius(defaults.cornerRadius);
+    if (defaults.tipDiameter !== undefined) setTipDiameter(defaults.tipDiameter);
   };
 
   const handleCreate = () => {
@@ -106,7 +134,14 @@ export function MachineModePanel() {
         ? { x: 0, y: 0, z: 0 }
         : { x: size.x / 2, y: size.y / 2, z: 0 };
 
-    setTool({ diameter: toolDiameter });
+    setTool({
+      type: toolType,
+      diameter: toolDiameter,
+      fluteLength: info.defaults.fluteLength ?? 25,
+      ...(info.needsAngle ? { angle } : {}),
+      ...(info.needsCornerRadius ? { cornerRadius: Math.min(cornerRadius, toolDiameter / 2) } : {}),
+      ...(info.needsTipDiameter ? { tipDiameter: Math.min(tipDiameter, toolDiameter) } : {}),
+    });
     setVoxelResolution(resolution);
     // Yeni blok HAM halde gorunsun: simulasyonu basa sar. Kullanici "Baslat"
     // dediginde blok gozunun onunde islenir.
@@ -144,6 +179,63 @@ export function MachineModePanel() {
         {field('toolDiameter', 'Takim capi')}
         {field('resolution', 'Cozunurluk')}
       </div>
+
+      <label className="job-form__field job-form__field--wide">
+        <span>Takim tipi</span>
+        <select value={toolType} onChange={(e) => changeToolType(e.target.value as ToolType)}>
+          {TOOL_TYPES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {(info.needsAngle || info.needsCornerRadius || info.needsTipDiameter) && (
+        <div className="job-form__row">
+          {info.needsAngle && (
+            <label className="job-form__field">
+              <span>Tepe acisi</span>
+              <input
+                type="number"
+                value={angle}
+                min={10}
+                max={179}
+                step={1}
+                onChange={(e) => setAngle(Number(e.target.value) || angle)}
+              />
+            </label>
+          )}
+          {info.needsCornerRadius && (
+            <label className="job-form__field">
+              <span>Kose radyusu</span>
+              <input
+                type="number"
+                value={cornerRadius}
+                min={0}
+                max={form.toolDiameter / 2}
+                step={0.5}
+                onChange={(e) => setCornerRadius(Number(e.target.value) || 0)}
+              />
+            </label>
+          )}
+          {info.needsTipDiameter && (
+            <label className="job-form__field">
+              <span>Uc capi</span>
+              <input
+                type="number"
+                value={tipDiameter}
+                min={0}
+                max={form.toolDiameter}
+                step={0.5}
+                onChange={(e) => setTipDiameter(Number(e.target.value) || 0)}
+              />
+            </label>
+          )}
+        </div>
+      )}
+
+      <p className="tool-form__hint">{info.hint}</p>
 
       <label className="job-form__field job-form__field--wide">
         <span>Malzeme</span>

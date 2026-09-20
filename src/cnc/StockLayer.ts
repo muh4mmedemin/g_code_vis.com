@@ -160,6 +160,8 @@ export class StockLayer implements SceneLayer {
         existing.geometry = geometry;
       } else {
         const mesh = new THREE.Mesh(geometry, this.material);
+        // Olcum araci yalnizca isaretli yuzeyleri hedefler.
+        mesh.userData.measurable = true;
         this.chunkMeshes.set(chunkIndex, mesh);
         group.add(mesh);
       }

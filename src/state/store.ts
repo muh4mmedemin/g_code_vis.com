@@ -4,13 +4,19 @@ import { createViewSlice, type ViewSlice } from './slices/viewSlice';
 import { createPlaybackSlice, type PlaybackSlice } from './slices/playbackSlice';
 import { createMachineSlice, type MachineSlice } from './slices/machineSlice';
 import { createSelectionSlice, type SelectionSlice } from './slices/selectionSlice';
+import { createMeasureSlice, type MeasureSlice } from './slices/measureSlice';
 
 /**
  * Tek global store, slice'lara bolunmus (zustand).
  * Kural: React bileşenleri store'u SELECTOR ile okur — tum store'u abone
  * olmak buyuk dosyalarda gereksiz render'a yol acar.
  */
-export type AppStore = DocumentSlice & ViewSlice & PlaybackSlice & MachineSlice & SelectionSlice;
+export type AppStore = DocumentSlice &
+  ViewSlice &
+  PlaybackSlice &
+  MachineSlice &
+  SelectionSlice &
+  MeasureSlice;
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createDocumentSlice(...a),
@@ -18,4 +24,5 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createPlaybackSlice(...a),
   ...createMachineSlice(...a),
   ...createSelectionSlice(...a),
+  ...createMeasureSlice(...a),
 }));
