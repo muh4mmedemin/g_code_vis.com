@@ -135,6 +135,13 @@ export function Viewport() {
       if (state.mode !== prev.mode) {
         stockLayer.setVisible(state.mode === 'cnc');
         solidPrintLayer.setMachineMode(state.mode);
+        // Kadraj moda gore degisir (CNC'de blok da hesaba katilir); yeniden
+        // cerceveleme yapilmazsa mod degistiren kullanici bos bir sahne gorur.
+        const bounds = state.parseResult?.stats.bounds;
+        frameWithStock(
+          bounds ? [bounds.min.x, bounds.min.y, bounds.min.z] : [0, 0, 0],
+          bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : [0, 0, 0],
+        );
       }
     });
 

@@ -94,9 +94,9 @@ export function StatsPanel() {
       {row(
         // CNC'de blogun olculeri hemen yukaridaki panelde yazar; buradaki
         // kutu takim yolunun kapladigi alandir, karismasin diye adi farkli.
-        mode === 'cnc' ? 'Isleme alani' : 'Olculer',
+        mode === 'cnc' ? 'Isleme alani (mm)' : 'Olculer (mm)',
         `${derived.size.x.toFixed(1)} × ${derived.size.y.toFixed(1)} × ` +
-          `${derived.size.z.toFixed(1)} mm`,
+          `${derived.size.z.toFixed(1)}`,
         'Takim yolunun kapladigi kutu (bounding box)',
       )}
       {row('Hareket', `${stats.totalMoves}`)}

@@ -15,7 +15,9 @@ export type ParamLetter =
   /** Delme cevrimlerinde gagalama adimi (G83/G73). */
   | 'Q'
   /** Tekrar sayisi (delme cevrimleri, alt program cagrilari). */
-  | 'L';
+  | 'L'
+  /** Doner eksenler — konum hesabinda kullanilmaz, yalnizca uyari uretir. */
+  | 'A' | 'B' | 'C';
 
 export interface GcodeToken {
   /**
@@ -37,7 +39,7 @@ export interface GcodeToken {
   lineIndex: number;
 }
 
-const PARAM_LETTERS = 'XYZEFIJKRSPTQL';
+const PARAM_LETTERS = 'XYZEFIJKRSPTQLABC';
 
 /**
  * Harf + (opsiyonel) sayi ciftleri.

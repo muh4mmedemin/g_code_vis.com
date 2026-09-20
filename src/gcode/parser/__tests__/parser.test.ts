@@ -514,3 +514,119 @@ describe('parseGcode — anlamsal uyarilar', () => {
     expect([...lines].sort((a, b) => a - b)).toEqual(lines);
   });
 });
+
+describe('parseGcode — program akisi ve alt programlar', () => {
+  it('M30 sonrasindaki kodu calistirmaz', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G1 X10 F200', 'M30', 'G1 X999'));
+    expect(r.moves).toHaveLength(1);
+    expect(r.moves[0]?.to.x).toBe(10);
+    expect(r.diagnostics.some((d) => d.code === 'CODE_AFTER_PROGRAM_END')).toBe(true);
+  });
+
+  it('M98 alt programi cagri yerinde calistirir', () => {
+    const r = parseGcode(
+      g(
+        'G21', 'G90', 'M3 S1000',
+        'G0 X0 Y0',
+        'M98 P1000',
+        'G0 Z50',
+        'M30',
+        'O1000',
+        'G1 X10 F100',
+        'G1 Y10',
+        'M99',
+      ),
+    );
+
+    // Alt programin hareketleri, cagri ile Z50 arasinda olmali.
+    const kinds = r.moves.map((m) => `${m.to.x},${m.to.y},${m.to.z}`);
+    expect(kinds).toEqual(['0,0,0', '10,0,0', '10,10,0', '10,10,50']);
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+  });
+
+  it('L ile alt programi birden fazla kez calistirir', () => {
+    const r = parseGcode(
+      g(
+        'G21', 'G90', 'M3 S1000', 'G0 X0 Y0',
+        'M98 P200 L3',
+        'M30',
+        'O200',
+        'G91', 'G1 X5 F100', 'G90',
+        'M99',
+      ),
+    );
+    const cuts = r.moves.filter((m) => !m.rapid);
+    expect(cuts).toHaveLength(3);
+    expect(cuts[2]?.to.x).toBeCloseTo(15);
+  });
+
+  it('bulunmayan alt program cagrisini hata olarak bildirir', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G1 X1 F100', 'M98 P4242', 'M30'));
+    expect(r.diagnostics.some((d) => d.code === 'SUBPROGRAM_NOT_FOUND')).toBe(true);
+  });
+
+  it('kendini cagiran alt programda sonsuz donguye girmez', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'M98 P1', 'M30', 'O1', 'G1 X1 F100', 'M98 P1', 'M99'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'SUBPROGRAM_TOO_DEEP')).toBe(true);
+    expect(r.moves.length).toBeLessThan(50);
+  });
+
+  it('dosya basindaki O numarasini program adi sayar', () => {
+    const r = parseGcode(g('O1234', 'G21', 'G90', 'M3 S1000', 'G1 X10 F100', 'M30'));
+    expect(r.moves).toHaveLength(1);
+  });
+});
+
+describe('parseGcode — ilerleme (feed) modlari', () => {
+  it('G93 ters zamanda sureyi 1/F dakika alir', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G93', 'G1 X100 F2'));
+    // F2 => hareket 1/2 dakika = 30 saniye (mesafeden bagimsiz)
+    expect(r.moves[0]?.duration).toBeCloseTo(30);
+  });
+
+  it('G94 mm/dakika varsayilanina doner', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G93', 'G1 X10 F2', 'G94', 'G1 X20 F600'));
+    expect(r.moves[1]?.duration).toBeCloseTo(1);
+  });
+
+  it('G95 mm/devir suresini is mili hizindan hesaplar', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G95', 'G1 X100 F0.2'));
+    // 0.2 mm/devir * 1000 dev/dk = 200 mm/dk => 100mm = 30 saniye
+    expect(r.moves[0]?.duration).toBeCloseTo(30);
+  });
+});
+
+describe('parseGcode — ek CNC komutlari', () => {
+  it('G53 makine koordinatini bir kez uyarir', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'G1 X10 F200', 'G53 G0 Z0', 'G53 G0 X0'),
+    );
+    expect(r.diagnostics.filter((d) => d.code === 'MACHINE_COORDINATES')).toHaveLength(1);
+  });
+
+  it('G10 ve G92.1 icin bilinmeyen komut uyarisi vermez', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'G10 L2 P1 X0 Y0 Z0', 'G1 X5 F100', 'G92.1'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+  });
+
+  it('doner eksen (A/B/C) kullanimini uyarir', () => {
+    const r = parseGcode(g('G21', 'G90', 'M3 S1000', 'G1 X10 A90 F100'));
+    expect(r.diagnostics.some((d) => d.code === 'ROTARY_AXIS_IGNORED')).toBe(true);
+  });
+
+  it('G91 + L ile delme cevrimini bir sira delik olarak tekrarlar', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S1000', 'G0 Z5', 'G91', 'G99 G81 X10 Y0 Z-5 R-3 L3 F100', 'G80'),
+    );
+    const plunges = r.moves.filter((m) => !m.rapid && m.distance > 0);
+    expect(plunges).toHaveLength(3);
+    expect(plunges.map((m) => m.to.x)).toEqual([10, 20, 30]);
+    // Her delik AYNI derinlikte olmali (tekrarlar ust uste inmemeli).
+    const depths = plunges.map((m) => Number(m.to.z.toFixed(3)));
+    expect(new Set(depths).size).toBe(1);
+  });
+});
