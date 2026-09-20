@@ -154,9 +154,16 @@ body {
   flex-shrink: 0;
 }
 
-.overlay-slot--right {
+/*
+ * Katman kaydiricisi SOL kenarda durur.
+ *
+ * Sag ust yigin (gorunum + blok + istatistik panelleri) artik ekran
+ * yuksekligini doldurabiliyor; kaydirici sagda kalsaydi panellerin uzerine
+ * binip degerleri kapatirdi.
+ */
+.overlay-slot--left {
   top: 50%;
-  right: 10px;
+  left: 10px;
   transform: translateY(-50%);
 }
 
@@ -524,6 +531,7 @@ body {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   text-align: right;
+  white-space: nowrap;
 }
 
 .stats__value--error {

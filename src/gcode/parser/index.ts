@@ -25,6 +25,57 @@ export interface ParseOptions {
 /** Cok buyuk dosyalarda tani listesinin bellegi doldurmasini engeller. */
 const DEFAULT_MAX_DIAGNOSTICS = 500;
 
+/** Ic ice alt program cagrisi siniri (dongusel cagrilara karsi). */
+const MAX_SUBPROGRAM_DEPTH = 10;
+/** Tek bir M98 cagrisinin en fazla tekrar sayisi. */
+const MAX_SUBPROGRAM_REPEAT = 1000;
+
+function clampRepeat(value: number): number {
+  if (!Number.isFinite(value) || value < 1) return 1;
+  return Math.min(MAX_SUBPROGRAM_REPEAT, Math.floor(value));
+}
+
+/** "O1000" / "N10 O1000" satirindaki program numarasi, yoksa null. */
+function parseProgramLabel(line: string): number | null {
+  const match = /^\s*(?:N\s*\d+\s*)?O\s*(\d+)/i.exec(line);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Dosyadaki alt program tanimlarini bulur: "O1000" satirindan M99'a
+ * (veya bir sonraki O etiketine / dosya sonuna) kadar olan aralik.
+ */
+function scanSubprograms(lines: string[]): Map<number, { start: number; end: number }> {
+  const result = new Map<number, { start: number; end: number }>();
+  let current: { number: number; start: number } | null = null;
+
+  const close = (end: number): void => {
+    if (current && !result.has(current.number)) {
+      result.set(current.number, { start: current.start, end });
+    }
+    current = null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const label = parseProgramLabel(line);
+    if (label !== null) {
+      close(i);
+      current = { number: label, start: i + 1 };
+      continue;
+    }
+    if (current && /\bM\s*0*99\b/i.test(line)) {
+      close(i);
+    }
+  }
+  close(lines.length);
+
+  return result;
+}
+
 /** Slicer yorumundan gelen katman sinyali. */
 interface RawLayerHint {
   lineIndex: number;
@@ -59,6 +110,11 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
 
   const dialect = resolveDialect(lines, options.forceDialect);
 
+  /** A/B/C (doner eksen) sozcugu goren ilk satir — tani icin. */
+  let rotaryLine: number | null = null;
+  /** M30/M2 ile programin bittigi satir (varsa). */
+  let programEndLine: number | null = null;
+
   const emitMove = (move: Move): void => {
     // Is mili durumu hareketin YAPILDIGI anda onemlidir (program sonundaki
     // M5 sonradan bayragi kapatir), bu yuzden burada yakalanir.
@@ -76,56 +132,165 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
   const totalLines = lines.length;
   const progressStep = Math.max(1, Math.floor(totalLines / 50));
 
-  for (let i = 0; i < totalLines; i++) {
-    const line = lines[i];
-    if (line === undefined) continue;
-    if (line.trim().length === 0) continue;
+  // Alt program (M98) etiketleri: "O1000" satirindan M99'a kadarki aralik.
+  const subprograms = scanSubprograms(lines);
 
-    const token = tokenizeLine(line, i);
+  /**
+   * Satir araligini calistirir.
+   *
+   * ANA PROGRAM ve ALT PROGRAM ayni koddan gecer; fark yalnizca `depth`tir.
+   * M98 bir alt programi burada yeniden cagirir (Fanuc/LinuxCNC davranisi),
+   * M99 alt programdan doner, M30/M2 ise ana programi bitirir.
+   *
+   * @returns 'end' ana programin bittigini bildirir (sonrasi alt program
+   *          tanimlaridir ve ana akista CALISTIRILMAMALIDIR).
+   */
+  const execute = (from: number, to: number, depth: number): 'end' | 'return' | 'done' => {
+    for (let i = from; i < to; i++) {
+      const line = lines[i];
+      if (line === undefined) continue;
+      if (line.trim().length === 0) continue;
 
-    // Slicer'in katman yorumlari (varsa) sinir olarak kaydedilir.
-    if (token.comment && dialect) {
-      const hint = dialect.parseLayerHint(token.comment);
-      if (hint) layerHints.push({ lineIndex: i, z: hint.z });
-    }
+      const token = tokenizeLine(line, i);
 
-    const ctx = {
-      state,
-      emitMove,
-      diagnostic: (d: Omit<ParseDiagnostic, 'lineIndex'>) =>
-        pushDiagnostic({ ...d, lineIndex: i }),
-    };
-
-    if (token.commands.length === 0) {
-      // Komutsuz ama parametreli satir: "F3000" gibi modal feedrate atamalari.
-      if (token.params.F !== undefined) {
-        state.feedrate = toMillimeters(token.params.F, state.unit);
+      // Slicer'in katman yorumlari (varsa) sinir olarak kaydedilir.
+      // Alt program tekrarlarinda ayni satir birden fazla gecebilir; ipucu
+      // yalnizca ilk geciste kaydedilir (assignLayers sirali bekler).
+      if (token.comment && dialect && depth === 0) {
+        const hint = dialect.parseLayerHint(token.comment);
+        if (hint) layerHints.push({ lineIndex: i, z: hint.z });
       }
 
-      // MODAL HAREKET: G-code'da hareket komutu kalicidir. "G1 X10 F300"
-      // satirindan sonra gelen "X20 Y5" satiri da bir G1 hareketidir. Gercek
-      // CNC programlari (ozellikle elle yazilanlar ve Fanuc/Heidenhain post
-      // ciktilari) komut sozcugunu tekrar etmez; bu dal olmadan takim
-      // yolunun buyuk bolumu sessizce kaybolurdu.
-      if (hasAxisWord(token) && state.motionMode && MODAL_REPEATABLE.has(state.motionMode)) {
-        dispatch(state.motionMode, token, ctx, pushDiagnostic, i);
+      if (token.params.A !== undefined || token.params.B !== undefined || token.params.C !== undefined) {
+        if (rotaryLine === null) rotaryLine = i;
       }
-      continue;
+
+      const ctx = {
+        state,
+        emitMove,
+        diagnostic: (d: Omit<ParseDiagnostic, 'lineIndex'>) =>
+          pushDiagnostic({ ...d, lineIndex: i }),
+      };
+
+      // --- Akis kontrolu: M98 / M99 / M30 / M2 ve O etiketleri -------------
+      const label = parseProgramLabel(line);
+      if (label !== null) {
+        // Dosya basindaki O numarasi programin ADIDIR; ilerideki O satirlari
+        // ise alt program tanimlarinin basidir ve ana akista calistirilmaz.
+        if (depth === 0 && moves.length > 0) return 'end';
+        continue;
+      }
+
+      if (token.commands.includes('M99')) {
+        if (depth > 0) return 'return';
+        continue;
+      }
+
+      if (token.commands.includes('M98')) {
+        runSubprogram(token, i, depth, ctx);
+        continue;
+      }
+
+      if (token.commands.includes('M30') || token.commands.includes('M2')) {
+        if (depth === 0) {
+          programEndLine = i;
+          return 'end';
+        }
+        continue;
+      }
+
+      if (token.commands.length === 0) {
+        // Komutsuz ama parametreli satir: "F3000" gibi modal feedrate atamalari.
+        if (token.params.F !== undefined) {
+          state.feedrate = toMillimeters(token.params.F, state.unit);
+        }
+
+        // MODAL HAREKET: G-code'da hareket komutu kalicidir. "G1 X10 F300"
+        // satirindan sonra gelen "X20 Y5" satiri da bir G1 hareketidir. Gercek
+        // CNC programlari (ozellikle elle yazilanlar ve Fanuc/Heidenhain post
+        // ciktilari) komut sozcugunu tekrar etmez; bu dal olmadan takim
+        // yolunun buyuk bolumu sessizce kaybolurdu.
+        if (hasAxisWord(token) && state.motionMode && MODAL_REPEATABLE.has(state.motionMode)) {
+          dispatch(state.motionMode, token, ctx, pushDiagnostic, i);
+        }
+        continue;
+      }
+
+      // Modal komutlar (G90, G21, G17, T0 ...) ayni satirdaki hareket
+      // komutundan ONCE uygulanmalidir: "G0 G90 X10" once mutlak moda gecer.
+      for (const command of token.commands) {
+        if (MOTION_COMMANDS.has(command)) continue;
+        dispatch(command, token, ctx, pushDiagnostic, i);
+      }
+      for (const command of token.commands) {
+        if (!MOTION_COMMANDS.has(command)) continue;
+        dispatch(command, token, ctx, pushDiagnostic, i);
+      }
+
+      if (options.onProgress && depth === 0 && i % progressStep === 0) {
+        options.onProgress(i / totalLines);
+      }
+    }
+    return 'done';
+  };
+
+  /** M98 P#### L# — alt programi L kez calistirir. */
+  function runSubprogram(
+    token: ReturnType<typeof tokenizeLine>,
+    lineIndex: number,
+    depth: number,
+    ctx: { diagnostic: (d: Omit<ParseDiagnostic, 'lineIndex'>) => void },
+  ): void {
+    if (depth >= MAX_SUBPROGRAM_DEPTH) {
+      ctx.diagnostic({
+        severity: 'error',
+        code: 'SUBPROGRAM_TOO_DEEP',
+        message: `Alt program cagrilari ${MAX_SUBPROGRAM_DEPTH} seviyeyi asti; dongu olabilir.`,
+      });
+      return;
     }
 
-    // Modal komutlar (G90, G21, G17, T0 ...) ayni satirdaki hareket
-    // komutundan ONCE uygulanmalidir: "G0 G90 X10" once mutlak moda gecer.
-    for (const command of token.commands) {
-      if (MOTION_COMMANDS.has(command)) continue;
-      dispatch(command, token, ctx, pushDiagnostic, i);
-    }
-    for (const command of token.commands) {
-      if (!MOTION_COMMANDS.has(command)) continue;
-      dispatch(command, token, ctx, pushDiagnostic, i);
+    const programNumber = token.params.P;
+    if (programNumber === undefined) {
+      ctx.diagnostic({
+        severity: 'error',
+        code: 'SUBPROGRAM_NO_P',
+        message: 'M98 cagrisinda alt program numarasi (P) yok.',
+      });
+      return;
     }
 
-    if (options.onProgress && i % progressStep === 0) {
-      options.onProgress(i / totalLines);
+    const target = subprograms.get(programNumber);
+    if (!target) {
+      ctx.diagnostic({
+        severity: 'error',
+        code: 'SUBPROGRAM_NOT_FOUND',
+        message: `O${programNumber} alt programi bu dosyada bulunamadi; cagri atlandi.`,
+      });
+      return;
+    }
+
+    const repeats = clampRepeat(token.params.L ?? token.params.K ?? 1);
+    for (let n = 0; n < repeats; n++) {
+      execute(target.start, target.end, depth + 1);
+    }
+    void lineIndex;
+  }
+
+  execute(0, totalLines, 0);
+
+  // Program sonundan (M30/M2) sonra kod varsa kullanici bunu bilmeli:
+  // editorde yazdigi satirin neden hicbir sey yapmadigi aksi halde belirsiz
+  // kalir. Alt program tanimlari bu uyariyi tetiklemez.
+  if (programEndLine !== null) {
+    const strayLine = findCodeAfterProgramEnd(lines, programEndLine, subprograms);
+    if (strayLine !== null) {
+      diagnostics.push({
+        lineIndex: strayLine,
+        severity: 'warning',
+        code: 'CODE_AFTER_PROGRAM_END',
+        message: `Program ${programEndLine + 1}. satirda (M30/M2) bitiyor; bu satir calistirilmadi.`,
+      });
     }
   }
 
@@ -135,6 +300,16 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
       severity: 'info',
       code: 'DIAGNOSTICS_TRUNCATED',
       message: `${suppressedDiagnostics} ek tani kaydi gosterilmedi.`,
+    });
+  }
+
+  if (rotaryLine !== null) {
+    diagnostics.push({
+      lineIndex: rotaryLine,
+      severity: 'warning',
+      code: 'ROTARY_AXIS_IGNORED',
+      message:
+        'Doner eksen (A/B/C) komutlari simule edilmiyor; yalnizca XYZ hareketi gosteriliyor.',
     });
   }
 
@@ -156,6 +331,29 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
     dialect: dialect?.name ?? GENERIC_DIALECT_NAME,
     buffers,
   };
+}
+
+/**
+ * Program sonundan sonra kalan, alt program tanimina ait OLMAYAN ilk kod
+ * satiri. Yoksa null.
+ */
+function findCodeAfterProgramEnd(
+  lines: string[],
+  programEndLine: number,
+  subprograms: Map<number, { start: number; end: number }>,
+): number | null {
+  const ranges = [...subprograms.values()];
+  for (let i = programEndLine + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === undefined || line.trim().length === 0) continue;
+    if (parseProgramLabel(line) !== null) continue;
+    if (ranges.some((range) => i >= range.start && i < range.end)) continue;
+    const token = tokenizeLine(line, i);
+    if (token.commands.length === 0 && !hasAxisWord(token)) continue;
+    if (token.commands.includes('M99')) continue;
+    return i;
+  }
+  return null;
 }
 
 function resolveDialect(lines: string[], forced?: string): Dialect | null {

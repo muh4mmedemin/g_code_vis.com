@@ -13,7 +13,7 @@ export function ViewportOverlay() {
         <MachineModePanel />
         <StatsPanel />
       </div>
-      <div className="overlay-slot overlay-slot--right">
+      <div className="overlay-slot overlay-slot--left">
         <LayerSlider />
       </div>
       <div className="overlay-slot overlay-slot--bottom">

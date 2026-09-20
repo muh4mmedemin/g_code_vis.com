@@ -1,8 +1,7 @@
 import type { GcodeToken } from './tokenizer';
 import type { CannedCycleState, MachineState } from './machineState';
-import { toMillimeters } from './machineState';
+import { feedDuration, toMillimeters } from './machineState';
 import type { Move, MoveKind, ParseDiagnostic, Vec3 } from '@/core/types';
-import { estimateMoveDuration } from '../stats';
 import { segmentArc } from './arcs';
 
 /**
@@ -91,7 +90,7 @@ function linearMove(rapid: boolean): CommandHandler {
     tool: state.tool,
     rapid,
     distance,
-    duration: estimateMoveDuration(distance, state.feedrate),
+    duration: feedDuration(state, distance),
   });
   };
 }
@@ -174,7 +173,7 @@ function handleArcMove(clockwise: boolean): CommandHandler {
         tool: state.tool,
         rapid: false,
         distance,
-        duration: estimateMoveDuration(distance, state.feedrate),
+        duration: feedDuration(state, distance),
       });
       return;
     }
@@ -199,7 +198,7 @@ function handleArcMove(clockwise: boolean): CommandHandler {
         tool: state.tool,
         rapid: false,
         distance,
-        duration: estimateMoveDuration(distance, state.feedrate),
+        duration: feedDuration(state, distance),
       });
       cursor = point;
     }
@@ -325,8 +324,19 @@ function handleToolChangeM6(token: GcodeToken, ctx: HandlerContext): void {
   if (Number.isFinite(index)) ctx.state.tool = index;
 }
 
-function handleSpindleOn(_token: GcodeToken, ctx: HandlerContext): void {
+function handleSpindleOn(token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.spindleOn = true;
+  // S degeri G95 (mm/devir) suresi icin gerekir.
+  if (token.params.S !== undefined && token.params.S > 0) {
+    ctx.state.spindleRpm = token.params.S;
+  }
+}
+
+/** G93/G94/G95 — F degerinin anlamini degistirir (bkz. feedDuration). */
+function setFeedMode(mode: MachineState['feedMode']): CommandHandler {
+  return (_token, ctx) => {
+    ctx.state.feedMode = mode;
+  };
 }
 
 function handleSpindleOff(_token: GcodeToken, ctx: HandlerContext): void {
@@ -373,9 +383,6 @@ function cannedCycle(command: string): CommandHandler {
     const prev = state.cannedCycle;
     const relative = state.positioning === 'relative';
 
-    const x = resolveAxis(token.params.X, state.position.x, state.positioning, state.unit);
-    const y = resolveAxis(token.params.Y, state.position.y, state.positioning, state.unit);
-
     if (token.params.F !== undefined) {
       state.feedrate = toMillimeters(token.params.F, state.unit);
     }
@@ -384,6 +391,55 @@ function cannedCycle(command: string): CommandHandler {
     // ILK satirinda belirlenir; tekrarlarda korunur.
     const initialZ = prev ? prev.initialZ : state.position.z;
 
+    const qRaw =
+      token.params.Q !== undefined ? toMillimeters(token.params.Q, state.unit) : undefined;
+    const q = Math.abs(qRaw ?? prev?.q ?? 0);
+    const dwell = token.params.P ?? prev?.dwell ?? 0;
+
+    const needsPeck = command === 'G83' || command === 'G73';
+    if (needsPeck && q <= 0) {
+      ctx.diagnostic({
+        severity: 'warning',
+        code: 'CANNED_CYCLE_NO_Q',
+        message: `${command} gagalama adimi (Q) verilmemis; tek pasoda delindi.`,
+      });
+    }
+
+    /**
+     * L/K tekrar sayisi. G91'de her tekrar, X/Y artislari kadar kayarak yeni
+     * bir delik acar — bir sira delik tek satirda bu sekilde programlanir.
+     * G90'da tekrar ayni deligi yeniden delmek olurdu; Fanuc bu durumda L'yi
+     * dikkate almaz, biz de almiyoruz.
+     */
+    const repeatParam = token.params.L ?? token.params.K;
+    const repeats = relative
+      ? Math.min(1000, Math.max(1, Math.floor(repeatParam ?? 1)))
+      : 1;
+
+    const step = (to: Vec3, rapid: boolean): void => {
+      const from: Vec3 = { ...state.position };
+      const distance = distanceBetween(from, to);
+      state.position = { ...to };
+      if (distance === 0) return;
+      ctx.emitMove({
+        lineIndex: token.lineIndex,
+        kind: rapid ? 'travel' : 'extrude',
+        from,
+        to: { ...to },
+        e: 0,
+        f: state.feedrate,
+        layerIndex: 0,
+        tool: state.tool,
+        rapid,
+        distance,
+        duration: feedDuration(state, distance),
+      });
+    };
+
+    // R ve Z duzlemleri cevrimin BASINDAKI seviyeye gore bir kez cozulur.
+    // Tekrarlarda (L) takim ayni duzleme geri dondugu icin bu degerler
+    // degismez; dongu icinde yeniden hesaplanirsa her delik bir oncekinden
+    // daha derine iner (yanlis).
     const rParam =
       token.params.R !== undefined ? toMillimeters(token.params.R, state.unit) : undefined;
     const r = rParam !== undefined ? (relative ? state.position.z + rParam : rParam) : prev?.r;
@@ -403,85 +459,59 @@ function cannedCycle(command: string): CommandHandler {
       return;
     }
 
-    const qRaw = token.params.Q !== undefined ? toMillimeters(token.params.Q, state.unit) : undefined;
-    const q = Math.abs(qRaw ?? prev?.q ?? 0);
-    const dwell = token.params.P ?? prev?.dwell ?? 0;
+    for (let n = 0; n < repeats; n++) {
+      // Artimli modda her tekrar bir onceki DELIGIN XY'sinden kayar.
+      const x = resolveAxis(token.params.X, state.position.x, state.positioning, state.unit);
+      const y = resolveAxis(token.params.Y, state.position.y, state.positioning, state.unit);
 
-    const needsPeck = command === 'G83' || command === 'G73';
-    if (needsPeck && q <= 0) {
-      ctx.diagnostic({
-        severity: 'warning',
-        code: 'CANNED_CYCLE_NO_Q',
-        message: `${command} gagalama adimi (Q) verilmemis; tek pasoda delindi.`,
-      });
-    }
-
-    if (zBottom > r) {
-      ctx.diagnostic({
-        severity: 'warning',
-        code: 'CANNED_CYCLE_Z_ABOVE_R',
-        message: `${command}: delik dibi (Z${zBottom}) guvenlik duzleminin (R${r}) ustunde; delme olusmaz.`,
-      });
-    }
-
-    const step = (to: Vec3, rapid: boolean): void => {
-      const from: Vec3 = { ...state.position };
-      const distance = distanceBetween(from, to);
-      state.position = { ...to };
-      if (distance === 0) return;
-      ctx.emitMove({
-        lineIndex: token.lineIndex,
-        kind: rapid ? 'travel' : 'extrude',
-        from,
-        to: { ...to },
-        e: 0,
-        f: state.feedrate,
-        layerIndex: 0,
-        tool: state.tool,
-        rapid,
-        distance,
-        duration: estimateMoveDuration(distance, state.feedrate),
-      });
-    };
-
-    // 1) Guvenli yukseklige cik (takim R duzleminin altindaysa) ve XY'ye git.
-    if (state.position.z < r) step({ x: state.position.x, y: state.position.y, z: r }, true);
-    step({ x, y, z: state.position.z }, true);
-    // 2) R duzlemine hizli in.
-    step({ x, y, z: r }, true);
-
-    // 3) Delme.
-    if (needsPeck && q > 0) {
-      let depth = r;
-      while (depth > zBottom + 1e-9) {
-        const next = Math.max(zBottom, depth - q);
-        step({ x, y, z: next }, false);
-        if (next <= zBottom + 1e-9) break;
-        if (command === 'G83') {
-          // Tam geri cekilme: talas bosaltma.
-          step({ x, y, z: r }, true);
-          // Bir onceki derinligin hemen ustune hizli don.
-          step({ x, y, z: Math.min(r, next + 0.5) }, true);
-        } else {
-          // G73: yalnizca talas kirma icin kisa geri cekilme.
-          step({ x, y, z: Math.min(r, next + Math.min(q, 1)) }, true);
-        }
-        depth = next;
+      if (n === 0 && zBottom > r) {
+        ctx.diagnostic({
+          severity: 'warning',
+          code: 'CANNED_CYCLE_Z_ABOVE_R',
+          message: `${command}: delik dibi (Z${zBottom}) guvenlik duzleminin (R${r}) ustunde; delme olusmaz.`,
+        });
       }
-    } else {
-      step({ x, y, z: zBottom }, false);
-    }
 
-    // 4) Dipte bekleme (G82/G89). P saniye kabul edilir (LinuxCNC davranisi).
-    if ((command === 'G82' || command === 'G89') && dwell > 0) {
-      state.dwellSeconds += dwell;
-    }
+      // 1) Guvenli yukseklige cik (takim R duzleminin altindaysa) ve XY'ye git.
+      if (state.position.z < r) step({ x: state.position.x, y: state.position.y, z: r }, true);
+      step({ x, y, z: state.position.z }, true);
+      // 2) R duzlemine hizli in.
+      step({ x, y, z: r }, true);
 
-    // 5) Geri cekilme. G85/G89 isleme feed'iyle cikar (raybalama/bore).
-    const feedOut = command === 'G85' || command === 'G89';
-    step({ x, y, z: r }, !feedOut);
-    if (state.retractMode === 'initial' && initialZ > r) {
-      step({ x, y, z: initialZ }, true);
+      // 3) Delme.
+      if (needsPeck && q > 0) {
+        let depth = r;
+        while (depth > zBottom + 1e-9) {
+          const next = Math.max(zBottom, depth - q);
+          step({ x, y, z: next }, false);
+          if (next <= zBottom + 1e-9) break;
+          if (command === 'G83') {
+            // Tam geri cekilme: talas bosaltma.
+            step({ x, y, z: r }, true);
+            // Bir onceki derinligin hemen ustune hizli don.
+            step({ x, y, z: Math.min(r, next + 0.5) }, true);
+          } else {
+            // G73: yalnizca talas kirma icin kisa geri cekilme.
+            step({ x, y, z: Math.min(r, next + Math.min(q, 1)) }, true);
+          }
+          depth = next;
+        }
+      } else {
+        step({ x, y, z: zBottom }, false);
+      }
+
+      // 4) Dipte bekleme (G82/G89). P saniye kabul edilir (LinuxCNC davranisi).
+      if ((command === 'G82' || command === 'G89') && dwell > 0) {
+        state.dwellSeconds += dwell;
+      }
+
+      // 5) Geri cekilme. G85/G89 isleme feed'iyle cikar (raybalama/bore).
+      const feedOut = command === 'G85' || command === 'G89';
+      step({ x, y, z: r }, !feedOut);
+      if (state.retractMode === 'initial' && initialZ > r) {
+        step({ x, y, z: initialZ }, true);
+      }
+
     }
 
     const cycleState: CannedCycleState = { command, z: zBottom, r, q, dwell, initialZ };
@@ -507,8 +537,12 @@ const IGNORED_COMMANDS = [
   // CNC: is mili / sogutma / program
   'M7', 'M8', 'M9',
   // Is koordinat sistemleri ve telafi (geometriyi kabaca etkilemez)
-  'G53', 'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
-  'G40', 'G43', 'G49', 'G61', 'G64', 'G94', 'G95',
+  'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
+  'G40', 'G43', 'G49', 'G61', 'G64',
+  // Ofset/telafi tablosu yazar; geometriyi dogrudan uretmez.
+  'G10', 'G92.1', 'G92.2', 'G92.3',
+  // Program akisi / alt program: index.ts akis kontrolunde ele alinir.
+  'M98', 'M99',
 ] as const;
 
 /**
@@ -519,6 +553,26 @@ const IGNORED_COMMANDS = [
  * yaniltici olur: parcanin gercekte 1 takim yaricapi daha buyuk/kucuk
  * cikacagini kullanici bilmeli.
  */
+/**
+ * G53 — bu satir icin MAKINE koordinat sistemi.
+ *
+ * Tezgahta "G53 G0 Z0" takimi en ust noktaya cekmektir; is sifirina gore
+ * yorumlanirsa ayni satir parcanin ust yuzeyine dalmak gibi gorunur. Makine
+ * sifirinin nerede oldugunu dosyadan bilemeyiz, bu yuzden hareketi is
+ * koordinatiyla cizip kullaniciyi bir kez uyaririz.
+ */
+function handleMachineCoordinates(_token: GcodeToken, ctx: HandlerContext): void {
+  if (ctx.state.machineCoordReported) return;
+  ctx.state.machineCoordReported = true;
+  ctx.diagnostic({
+    severity: 'warning',
+    code: 'MACHINE_COORDINATES',
+    message:
+      'G53 makine koordinati kullaniliyor; makine sifiri bilinmedigi icin hareket is ' +
+      'sifirina gore cizildi (gercek tezgahta farkli bir noktaya gider).',
+  });
+}
+
 function handleCutterComp(token: GcodeToken, ctx: HandlerContext): void {
   const which = token.commands.find((c) => c === 'G41' || c === 'G42') ?? 'G41';
   ctx.diagnostic({
@@ -554,8 +608,12 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   M4: handleSpindleOn,
   M5: handleSpindleOff,
   M6: handleToolChangeM6,
+  G53: handleMachineCoordinates,
   G41: handleCutterComp,
   G42: handleCutterComp,
+  G93: setFeedMode('inverseTime'),
+  G94: setFeedMode('perMinute'),
+  G95: setFeedMode('perRevolution'),
   G98: setRetractMode('initial'),
   G99: setRetractMode('rPlane'),
   G80: handleCancelCycle,

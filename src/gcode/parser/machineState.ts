@@ -11,6 +11,14 @@ export type ArcPlane = 'XY' | 'XZ' | 'YZ';
  */
 export type ArcDistanceMode = 'incremental' | 'absolute';
 
+/**
+ * Ilerleme (feed) modu:
+ *  - perMinute    (G94, varsayilan): F = mm/dakika
+ *  - inverseTime  (G93): F = 1/dakika, yani hareket 1/F dakikada tamamlanir
+ *  - perRevolution(G95): F = mm/devir, sure is mili hizina baglidir
+ */
+export type FeedMode = 'perMinute' | 'inverseTime' | 'perRevolution';
+
 /** Delme cevriminden (G81/G83...) sonra donulecek Z duzlemi: G98/G99. */
 export type RetractMode = 'initial' | 'rPlane';
 
@@ -69,6 +77,10 @@ export interface MachineState {
   arcDistanceMode: ArcDistanceMode;
   /** G98/G99 — delme cevrimi sonrasi donulecek duzlem. */
   retractMode: RetractMode;
+  /** G93/G94/G95 — F degerinin nasil yorumlanacagi. */
+  feedMode: FeedMode;
+  /** M3/M4'teki S degeri (dev/dk) — G95 suresi icin gerekir. */
+  spindleRpm: number;
   /** Aktif delme cevrimi (G80 ile temizlenir). */
   cannedCycle: CannedCycleState | null;
 
@@ -77,6 +89,8 @@ export interface MachineState {
   unitsDeclared: boolean;
   /** G90/G91 goruldu mu? */
   positioningDeclared: boolean;
+  /** G53 uyarisi verildi mi? (satir basina degil, dosya basina bir kez) */
+  machineCoordReported: boolean;
   /** M3/M4 ile is mili calistirildi mi? */
   spindleOn: boolean;
   /**
@@ -104,12 +118,34 @@ export function createInitialState(): MachineState {
     motionMode: null,
     arcDistanceMode: 'incremental',
     retractMode: 'initial',
+    feedMode: 'perMinute',
+    spindleRpm: 0,
     cannedCycle: null,
     unitsDeclared: false,
     positioningDeclared: false,
+    machineCoordReported: false,
     spindleOn: false,
     spindleOffCutLine: null,
   };
+}
+
+/**
+ * Bir hareketin suresi (saniye) — aktif feed moduna gore.
+ *
+ * G93'te F, hareketin kendisini tanimlar: hareket 1/F dakikada biter, mesafe
+ * hesaba girmez. G95'te F mm/devir'dir, dolayisiyla is mili hizi bilinmeden
+ * sure hesaplanamaz.
+ */
+export function feedDuration(state: MachineState, distanceMm: number): number {
+  if (state.feedMode === 'inverseTime') {
+    return state.feedrate > 0 ? 60 / state.feedrate : 0;
+  }
+  if (state.feedMode === 'perRevolution') {
+    const mmPerMin = state.feedrate * state.spindleRpm;
+    return mmPerMin > 0 ? (distanceMm / mmPerMin) * 60 : 0;
+  }
+  if (state.feedrate <= 0) return 0;
+  return (distanceMm / state.feedrate) * 60;
 }
 
 /** Girilen deger birim moduna gore mm'ye cevrilir. */
