@@ -267,6 +267,7 @@ export class SolidPrintLayer implements SceneLayer {
       roughness: 0.75,
     });
     const mesh = new THREE.InstancedMesh(geometry, material, extrudeIndices.length);
+    mesh.userData.measurable = true;
     mesh.instanceColor = new THREE.InstancedBufferAttribute(
       new Float32Array(extrudeIndices.length * 3),
       3,

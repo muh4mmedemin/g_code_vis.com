@@ -20,6 +20,7 @@ export class SceneManager {
   private resizeObserver: ResizeObserver | null = null;
   private layers = new Map<string, SceneLayer>();
   private renderRequested = false;
+  private raycaster = new THREE.Raycaster();
   private rafHandle: number | null = null;
   private lastFrameTime = 0;
 
@@ -37,10 +38,17 @@ export class SceneManager {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(this.renderer.domElement);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
-    const directional = new THREE.DirectionalLight(0xffffff, 0.6);
-    directional.position.set(1, -1, 2);
-    this.scene.add(ambient, directional);
+    // Isik dengesi: yuksek ambient her yuzeyi ayni parlaklikta gosterir ve
+    // yuzeydeki kabartiyi (kure uclu takimin biraktigi yuvarlak taban, paso
+    // izleri) gorunmez kilar. Bu yuzden ambient dusuk tutulup yonlu isiklar
+    // one cikarilir: bir ana isik gorunur yuzeyi modeller, karsi taraftan
+    // gelen zayif dolgu isigi da golgede kalan yuzleri okunur birakir.
+    const ambient = new THREE.AmbientLight(0xffffff, 0.42);
+    const key = new THREE.DirectionalLight(0xffffff, 0.95);
+    key.position.set(1, -1.2, 1.6);
+    const fill = new THREE.DirectionalLight(0xdbe6ff, 0.35);
+    fill.position.set(-1.2, 0.8, 0.6);
+    this.scene.add(ambient, key, fill);
 
     this.cameraRig = new CameraRig(this.camera, this.renderer.domElement, () =>
       this.requestRender(),
@@ -130,6 +138,38 @@ export class SceneManager {
 
   requestRender(): void {
     this.renderRequested = true;
+  }
+
+  /** Fare olaylarinin baglanacagi canvas. */
+  get canvas(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  /**
+   * Ekran koordinatindan sahnedeki KATI yuzeye isin gonderir.
+   *
+   * Yalnizca `userData.measurable` isaretli nesneler hedeflenir: grid, eksen
+   * cizgileri ve takim isaretcisi olcume girmez — kullanici parcayi olcmek
+   * ister, yardimci cizgileri degil.
+   */
+  pickPoint(clientX: number, clientY: number): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+
+    const targets: THREE.Object3D[] = [];
+    this.scene.traverse((object) => {
+      if (object.visible && object.userData.measurable === true) targets.push(object);
+    });
+    if (targets.length === 0) return null;
+
+    const hits = this.raycaster.intersectObjects(targets, false);
+    return hits[0]?.point.clone() ?? null;
   }
 
   frameBounds(min: [number, number, number], max: [number, number, number]): void {

@@ -1,5 +1,6 @@
 import type { Move, ToolDefinition } from '@/core/types';
 import type { VoxelGrid } from './VoxelGrid';
+import { tipHeightAtRadius, toolRadius } from './toolProfile';
 
 /**
  * Talas kaldirma cekirdegi (Faz 6).
@@ -12,8 +13,13 @@ import type { VoxelGrid } from './VoxelGrid';
  * Bu "2.5D" kabul, gercek isleme ile ortusur: freze bir cebi acarken sap
  * kismi da malzemeden gecer, dolayisiyla ucun uzerindeki her sey kalkar.
  *
- * Kure uclu (ball nose) takimlar icin uc yuzeyi kureseldir; bu ilk surumde
- * duz uc varsayilir (proje dokumani da boyle basliyor).
+ * UC SEKLI: Takimin tabani her zaman duz degildir. Kure uclu takim yuvarlak
+ * bir taban, matkap/V uc ise konik bir taban birakir. Bunu, eksenden uzaklasan
+ * her nokta icin ucun ne kadar YUKARIDA oldugunu veren profil fonksiyonuyla
+ * modelleriz (bkz. toolProfile.ts): kolonun bosalma sinirI
+ *   tipZ + tipHeightAtRadius(uzaklik)
+ * olur. Duz frezede bu ek yukseklik her yerde 0'dir, yani eski davranis
+ * aynen korunur.
  */
 
 /** Hizli (G0) hareketler ve home talas kaldirmaz. */
@@ -28,7 +34,7 @@ function isCuttingMove(move: Move): boolean {
 export function carveMove(grid: VoxelGrid, move: Move, tool: ToolDefinition): number {
   if (!isCuttingMove(move)) return 0;
 
-  const radius = Math.max(tool.diameter / 2, grid.cellSize * 0.5);
+  const radius = Math.max(toolRadius(tool), grid.cellSize * 0.5);
   const { from, to } = move;
 
   // Supurulen bolgenin XY sinir kutusu (takim yaricapi kadar genisletilmis).
@@ -89,8 +95,12 @@ export function carveMove(grid: VoxelGrid, move: Move, tool: ToolDefinition): nu
       }
       const tipZ = Math.min(from.z + dz * tMin, from.z + dz * tMax);
 
-      // Ucun uzerindeki her sey kalkar: tipZ'den grid'in tepesine kadar.
-      let kStart = Math.floor((tipZ - grid.min.z) / grid.cellSize);
+      // Ucun sekli: eksenden uzaklastikca taban yukselir (kure/koni ucta).
+      const profileLift = tipHeightAtRadius(tool, Math.sqrt(distSq));
+      if (!Number.isFinite(profileLift)) continue;
+
+      // Ucun uzerindeki her sey kalkar: uc yuzeyinden grid'in tepesine kadar.
+      let kStart = Math.floor((tipZ + profileLift - grid.min.z) / grid.cellSize);
       if (kStart < 0) kStart = 0;
       for (let k = kStart; k < grid.dims.nz; k++) {
         if (grid.clearCell(i, j, k)) removed++;

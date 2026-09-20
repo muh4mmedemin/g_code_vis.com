@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { LayerContext, PlaybackFrame, SceneLayer } from '../core/SceneLayer';
-import type { Move, MoveKind, ParseResult, ViewSettings } from '@/core/types';
+import type { MachineMode, Move, MoveKind, ParseResult, ToolDefinition, ViewSettings } from '@/core/types';
+import { DEFAULT_TOOL } from '@/core/constants';
+import { profileSamples, tipLength, toolRadius } from '@/cnc/toolProfile';
 
 /** Onceki konumdan yeni konuma geciste kullanilan yumusatma katsayisi. */
 const POSITION_SMOOTHING = 0.35;
@@ -12,15 +14,17 @@ const SPIN_SPEED_CUTTING = 26;
 const SPIN_SPEED_TRAVEL = 6;
 
 /**
- * Simulasyon sirasinda nozzle/kesici takimin anlik konumunu gosteren isaretci
- * (koni + govde). Konum, moveCursor'un tam sayi kismindaki hareketten bir
- * sonrakine dogru DOGRUSAL olarak interpole edilir (kesirli kisim), boylece
- * playbackLoop her karede kucuk adimlar attikca hareket pursuzsuz gorunur.
+ * Simulasyon sirasinda nozzle/kesici takimin anlik konumunu gosteren isaretci.
  *
- * Ek olarak: takim govdesi surekli doner (spindle hissi) ve kesim/travel
- * durumuna gore renk/parlaklik degistirir, boylece "cidden isliyormus" hissi
- * guclenir. Konum hedefi de hafifce yumusatilir (smoothing) — ani sicrama
- * yerine kisa bir "yakalama" hareketi olur.
+ * CNC modunda gosterilen sekil, SECILEN TAKIMIN gercek profilidir: kure uclu
+ * takim yuvarlak, matkap konik, havsa frezesi genis acili gorunur. Profil,
+ * talas kaldirma cekirdeginin kullandigi ayni fonksiyondan uretilir
+ * (cnc/toolProfile), dolayisiyla ekranda gordugunuz uc ile kesen uc ayni
+ * seydir. Print modunda ise klasik nozzle konisi cizilir.
+ *
+ * Konum, moveCursor'un tam sayi kismindaki hareketten bir sonrakine dogru
+ * DOGRUSAL olarak interpole edilir; ayrica takim doner ve kesim/travel
+ * durumuna gore renk degistirir.
  */
 export class ToolHeadLayer implements SceneLayer {
   readonly id = 'tool-head';
@@ -28,10 +32,9 @@ export class ToolHeadLayer implements SceneLayer {
   private group: THREE.Group | null = null;
   private moves: Move[] | null = null;
 
-  private tip: THREE.Mesh | null = null;
-  private shaft: THREE.Mesh | null = null;
   private spinGroup: THREE.Group | null = null;
   private tipMaterial: THREE.MeshStandardMaterial | null = null;
+  private shaftMaterial: THREE.MeshStandardMaterial | null = null;
 
   private targetPosition = new THREE.Vector3();
   private hasPosition = false;
@@ -39,6 +42,9 @@ export class ToolHeadLayer implements SceneLayer {
   private spinAngle = 0;
   private lastProgressAt = 0;
   private currentKind: MoveKind = 'travel';
+
+  private mode: MachineMode = 'print';
+  private tool: ToolDefinition = { ...DEFAULT_TOOL };
 
   init(ctx: LayerContext): void {
     this.ctx = ctx;
@@ -48,47 +54,105 @@ export class ToolHeadLayer implements SceneLayer {
     group.add(spinGroup);
     this.spinGroup = spinGroup;
 
-    // Kesici ucu: asagi bakan koni (Z-up sahnede tepe -Z yonunde).
-    const tipHeight = 8;
-    const tipRadius = 2.2;
-    const tipGeometry = new THREE.ConeGeometry(tipRadius, tipHeight, 16);
-    // ConeGeometry'nin ekseni varsayilan olarak Y'dir (apex +Y'de). rotateX(PI)
-    // yalnizca Y ekseni uzerinde ters cevirir (konu hala yan yatirir!) —
-    // ekseni Z'ye tasimak icin -90 derece dondurmek gerekir; sonucta apex
-    // -Z'ye (asagi) bakar.
-    tipGeometry.rotateX(-Math.PI / 2);
-    tipGeometry.translate(0, 0, tipHeight / 2);
-    const tipMaterial = new THREE.MeshStandardMaterial({
+    this.tipMaterial = new THREE.MeshStandardMaterial({
       color: 0xff3b6b,
       emissive: 0x4a0014,
       emissiveIntensity: 1,
       metalness: 0.3,
       roughness: 0.4,
     });
-    const tip = new THREE.Mesh(tipGeometry, tipMaterial);
-    spinGroup.add(tip);
-    this.tip = tip;
-    this.tipMaterial = tipMaterial;
-
-    // Govde: koninin ustunde ince bir silindir (mil/spindle hissi). Hafif
-    // yiv gorunumu icin radyal segment sayisi dusuk tutulup donme animasyonu
-    // ile "mil donuyor" izlenimi verilir.
-    const shaftHeight = 30;
-    const shaftGeometry = new THREE.CylinderGeometry(1.4, 1.4, shaftHeight, 8);
-    shaftGeometry.rotateX(Math.PI / 2);
-    shaftGeometry.translate(0, 0, tipHeight + shaftHeight / 2);
-    const shaftMaterial = new THREE.MeshStandardMaterial({
+    this.shaftMaterial = new THREE.MeshStandardMaterial({
       color: 0xd9dde3,
       metalness: 0.6,
       roughness: 0.3,
     });
-    const shaft = new THREE.Mesh(shaftGeometry, shaftMaterial);
-    spinGroup.add(shaft);
-    this.shaft = shaft;
 
     group.visible = false;
     this.group = group;
     ctx.scene.add(group);
+
+    this.rebuild();
+  }
+
+  setMachineMode(mode: MachineMode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.rebuild();
+  }
+
+  setTool(tool: ToolDefinition): void {
+    this.tool = tool;
+    if (this.mode === 'cnc') this.rebuild();
+  }
+
+  /** Takim/mod degisince govdeyi yeniden kurar (konum ve donus korunur). */
+  private rebuild(): void {
+    const spinGroup = this.spinGroup;
+    if (!spinGroup || !this.tipMaterial || !this.shaftMaterial) return;
+
+    for (const child of [...spinGroup.children]) {
+      spinGroup.remove(child);
+      if (child instanceof THREE.Mesh) child.geometry.dispose();
+    }
+
+    if (this.mode === 'cnc') {
+      this.buildCncTool(spinGroup);
+    } else {
+      this.buildPrintNozzle(spinGroup);
+    }
+    this.ctx?.requestRender();
+  }
+
+  /**
+   * CNC takimi: profilden uretilen donel yuzey (uc) + silindirik sap.
+   *
+   * LatheGeometry Y ekseni etrafinda doner; sahne Z-up oldugu icin +90 derece
+   * dondurulur, boylece ucun tepe noktasi grubun origin'ine (takim ucu) oturur.
+   */
+  private buildCncTool(parent: THREE.Group): void {
+    const radius = toolRadius(this.tool);
+    const tip = tipLength(this.tool);
+    const flute = Math.max(this.tool.fluteLength || 20, tip + radius);
+
+    const points = profileSamples(this.tool).map(([r, h]) => new THREE.Vector2(Math.max(r, 1e-4), h));
+    // Ucun bitiminden sapa kadar silindirik govde.
+    points.push(new THREE.Vector2(radius, flute));
+
+    const tipGeometry = new THREE.LatheGeometry(points, 24);
+    tipGeometry.rotateX(Math.PI / 2);
+    const tipMesh = new THREE.Mesh(tipGeometry, this.tipMaterial!);
+    parent.add(tipMesh);
+
+    // Takim tutucu: sapin uzerinde daha kalin, kisa bir govde.
+    const holderHeight = 24;
+    const holderRadius = Math.max(radius * 1.8, 4);
+    const holderGeometry = new THREE.CylinderGeometry(
+      holderRadius,
+      holderRadius * 0.85,
+      holderHeight,
+      16,
+    );
+    holderGeometry.rotateX(Math.PI / 2);
+    holderGeometry.translate(0, 0, flute + holderHeight / 2);
+    parent.add(new THREE.Mesh(holderGeometry, this.shaftMaterial!));
+  }
+
+  /** Print modu: asagi bakan nozzle konisi + ince govde. */
+  private buildPrintNozzle(parent: THREE.Group): void {
+    const tipHeight = 8;
+    const tipRadius = 2.2;
+    const tipGeometry = new THREE.ConeGeometry(tipRadius, tipHeight, 16);
+    // ConeGeometry'nin ekseni Y'dir (apex +Y'de); -90 derece donus apex'i
+    // asagi (-Z) bakacak sekilde Z eksenine tasir.
+    tipGeometry.rotateX(-Math.PI / 2);
+    tipGeometry.translate(0, 0, tipHeight / 2);
+    parent.add(new THREE.Mesh(tipGeometry, this.tipMaterial!));
+
+    const shaftHeight = 30;
+    const shaftGeometry = new THREE.CylinderGeometry(1.4, 1.4, shaftHeight, 8);
+    shaftGeometry.rotateX(Math.PI / 2);
+    shaftGeometry.translate(0, 0, tipHeight + shaftHeight / 2);
+    parent.add(new THREE.Mesh(shaftGeometry, this.shaftMaterial!));
   }
 
   private enabled = true;
@@ -174,16 +238,14 @@ export class ToolHeadLayer implements SceneLayer {
     if (this.group) {
       this.ctx?.scene.remove(this.group);
       this.group.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
-          obj.geometry.dispose();
-          (obj.material as THREE.Material).dispose();
-        }
+        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
       });
       this.group = null;
     }
-    this.tip = null;
-    this.shaft = null;
-    this.spinGroup = null;
+    this.tipMaterial?.dispose();
+    this.shaftMaterial?.dispose();
     this.tipMaterial = null;
+    this.shaftMaterial = null;
+    this.spinGroup = null;
   }
 }

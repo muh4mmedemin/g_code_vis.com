@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { useStore } from '@/state/store';
-import type { MachineMode, StockDefinition, StockMaterialId, Vec3 } from '@/core/types';
+import type {
+  MachineMode,
+  StockDefinition,
+  StockMaterialId,
+  ToolDefinition,
+  Vec3,
+} from '@/core/types';
 
 interface SampleEntry {
   label: string;
@@ -12,7 +18,14 @@ interface SampleEntry {
    * CNC ornekleri icin ham blok: ornek secildiginde bu olculerde TAM DOLU
    * bir blok kurulur ve program onu isler.
    */
-  stock?: { size: Vec3; origin: Vec3; toolDiameter: number; material: StockMaterialId };
+  stock?: {
+    size: Vec3;
+    origin: Vec3;
+    toolDiameter: number;
+    material: StockMaterialId;
+    /** Ornegin islendigi takim (uc sekli oyulan yuzeyi belirler). */
+    tool?: Partial<ToolDefinition>;
+  };
 }
 
 const SAMPLES: SampleEntry[] = [
@@ -113,6 +126,58 @@ const SAMPLES: SampleEntry[] = [
     },
   },
   {
+    label: 'Kure uclu yuzey',
+    description: 'Ball nose ile parabolik vadi: yuvarlak tabanli yuzey',
+    file: 'cnc-kure-uclu-yuzey.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 60, y: 60, z: 20 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+      material: 'aluminyum',
+      tool: { type: 'ball', fluteLength: 25 },
+    },
+  },
+  {
+    label: 'V uclu gravur',
+    description: '60 derece V uc ile yazi ve cerceve gravuru',
+    file: 'cnc-gravur-vbit.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 80, y: 50, z: 10 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+      material: 'derlin-siyah',
+      tool: { type: 'vbit', angle: 60, fluteLength: 15 },
+    },
+  },
+  {
+    label: 'Matkap seti',
+    description: 'Punta, gagalamali matkap ve havsa: konik delik tabani',
+    file: 'cnc-matkap-seti.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 80, y: 60, z: 15 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 5,
+      material: 'aluminyum',
+      tool: { type: 'drill', angle: 118, fluteLength: 40 },
+    },
+  },
+  {
+    label: 'Olcum alistirmasi',
+    description: 'Bilinen olculer: basamaklar, 30x20 cep, 40mm delik araligi',
+    file: 'cnc-olcum-alistirmasi.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 100, y: 70, z: 20 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+      material: 'derlin-mavi',
+      tool: { type: 'flat', fluteLength: 25 },
+    },
+  },
+  {
     label: 'CNC cep frezeleme',
     description: 'Coklu derinlik gecisli cep + tarama pasosu',
     file: 'cnc-cep-frezeleme.gcode',
@@ -142,7 +207,7 @@ export function SampleMenu() {
     const file = new File([text], sample.file, { type: 'text/plain' });
     setMode(sample.mode);
     if (sample.stock) {
-      setTool({ diameter: sample.stock.toolDiameter });
+      setTool({ diameter: sample.stock.toolDiameter, ...(sample.stock.tool ?? {}) });
       const stock: StockDefinition = {
         shape: 'box',
         size: sample.stock.size,

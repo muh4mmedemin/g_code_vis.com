@@ -328,3 +328,60 @@ describe('holder-konnektor ornegi', () => {
     expect(solidAt(20, 28, -75)).toBe(true);
   });
 });
+
+describe('uc sekli oymaya yansir', () => {
+  // Uc sekli milimetrenin altinda fark yaratir; hucre boyutu bunu cozecek
+  // kadar kucuk olmali (70mm blok / 160 = 0.44mm).
+  const plunge = (t: ToolDefinition, resolution = 160) => {
+    const grid = gridFor(resolution);
+    const r = parseGcode(['G21', 'G90', 'M3 S1000', 'G0 X0 Y0 Z1', 'G1 Z-10 F200'].join('\n'));
+    carveRange(grid, r.moves, 0, r.moves.length, t);
+    return grid;
+  };
+
+  /** Deligin tabanindaki en dusuk dolu hucrenin Z'si (belirtilen XY'de). */
+  const floorZ = (grid: VoxelGrid, x: number, y: number): number => {
+    const [cx, cy] = grid.worldToCell(x, y, 0);
+    for (let k = grid.dims.nz - 1; k >= 0; k--) {
+      if (grid.isSolid(cx, cy, k)) {
+        const [, , z] = grid.cellToWorld(cx, cy, k);
+        return z;
+      }
+    }
+    return grid.min.z;
+  };
+
+  it('duz freze duz taban birakir', () => {
+    const grid = plunge({ type: 'flat', diameter: 6, fluteLength: 25 });
+    const center = floorZ(grid, 0, 0);
+    const edge = floorZ(grid, 2.5, 0);
+    expect(Math.abs(edge - center)).toBeLessThan(grid.cellSize * 1.5);
+  });
+
+  it('kure uclu takim yuvarlak taban birakir', () => {
+    const grid = plunge({ type: 'ball', diameter: 6, fluteLength: 25 });
+    const center = floorZ(grid, 0, 0);
+    const edge = floorZ(grid, 2.5, 0);
+    // Kenar merkeze gore YUKARIDA kalir (kure yuzeyi): d=2.5mm'de
+    // 3 - sqrt(9 - 6.25) = 1.34mm.
+    expect(edge - center).toBeGreaterThan(1);
+    expect(edge - center).toBeLessThan(1.8);
+  });
+
+  it('matkap konik taban birakir ve aci derinligi belirler', () => {
+    const sharp = plunge({ type: 'drill', diameter: 6, fluteLength: 25, angle: 118 });
+    const blunt = plunge({ type: 'spot', diameter: 6, fluteLength: 25, angle: 90 });
+    const sharpEdge = floorZ(sharp, 2.5, 0) - floorZ(sharp, 0, 0);
+    const bluntEdge = floorZ(blunt, 2.5, 0) - floorZ(blunt, 0, 0);
+    // 90 derece punta matkabinin ucu daha uzundur (dar aci = uzun koni),
+    // dolayisiyla kenar ile merkez arasindaki fark daha buyuktur.
+    expect(bluntEdge).toBeGreaterThan(sharpEdge);
+    expect(sharpEdge).toBeGreaterThan(0.5);
+  });
+
+  it('sekilli uc, duz frezeden daha az malzeme kaldirir', () => {
+    const flat = plunge({ type: 'flat', diameter: 6, fluteLength: 25 });
+    const ball = plunge({ type: 'ball', diameter: 6, fluteLength: 25 });
+    expect(ball.countSolid()).toBeGreaterThan(flat.countSolid());
+  });
+});

@@ -3,6 +3,7 @@ import type {
   StockDefinition,
   StockMaterialId,
   ToolDefinition,
+  ToolType,
   ViewSettings,
 } from './types';
 
@@ -52,6 +53,91 @@ export const DEFAULT_STOCK: StockDefinition = {
 };
 
 export const DEFAULT_TOOL: ToolDefinition = { type: 'flat', diameter: 6, fluteLength: 25 };
+
+/**
+ * Takim tipleri ve atolyedeki tipik degerleri.
+ *
+ * `defaults` bir tip secildiginde forma doldurulur; kullanici capi/aciyi
+ * degistirebilir. `needsAngle` / `needsCornerRadius` hangi alanin anlamli
+ * oldugunu soyler — havsa frezesine kose radyusu sormanin anlami yok.
+ */
+export interface ToolTypeInfo {
+  id: ToolType;
+  label: string;
+  /** Kisa aciklama (panelde ipucu olarak gosterilir). */
+  hint: string;
+  defaults: Partial<ToolDefinition>;
+  needsAngle?: boolean;
+  needsCornerRadius?: boolean;
+  needsTipDiameter?: boolean;
+}
+
+export const TOOL_TYPES: ToolTypeInfo[] = [
+  {
+    id: 'flat',
+    label: 'Duz parmak freze',
+    hint: 'Duz tabanli; cep, kanal ve kontur icin standart takim.',
+    defaults: { diameter: 6, fluteLength: 25 },
+  },
+  {
+    id: 'ball',
+    label: 'Kure uclu (ball nose)',
+    hint: 'Yarim kure uc; egrisel yuzey ve 3B tarama isleri.',
+    defaults: { diameter: 6, fluteLength: 25 },
+  },
+  {
+    id: 'bull',
+    label: 'Kose radyuslu (bull nose)',
+    hint: 'Duz taban + kose radyusu; kaba islemede kose dayanimi saglar.',
+    defaults: { diameter: 8, fluteLength: 25, cornerRadius: 1 },
+    needsCornerRadius: true,
+  },
+  {
+    id: 'vbit',
+    label: 'V uclu gravur',
+    hint: 'Sivri koni; yazi/gravur ve keskin pah.',
+    defaults: { diameter: 6, fluteLength: 15, angle: 60 },
+    needsAngle: true,
+  },
+  {
+    id: 'drill',
+    label: 'Matkap (helisel)',
+    hint: 'Tepe acisi 118 derece (celik) veya 135 derece (paslanmaz/derin).',
+    defaults: { diameter: 5, fluteLength: 40, angle: 118 },
+    needsAngle: true,
+  },
+  {
+    id: 'spot',
+    label: 'Punta matkabi',
+    hint: 'Kisa ve rijit; matkabin kacmamasi icin once yer isaretler.',
+    defaults: { diameter: 8, fluteLength: 10, angle: 90 },
+    needsAngle: true,
+  },
+  {
+    id: 'chamfer',
+    label: 'Havsa / pah frezesi',
+    hint: 'Vida basi yuvasi ve kenar pahi; genelde 90 derece.',
+    defaults: { diameter: 10, fluteLength: 12, angle: 90, tipDiameter: 1 },
+    needsAngle: true,
+    needsTipDiameter: true,
+  },
+  {
+    id: 'reamer',
+    label: 'Rayba',
+    hint: 'Delinmis deligi olcusune getirir; silindirik keser.',
+    defaults: { diameter: 6, fluteLength: 30 },
+  },
+  {
+    id: 'tap',
+    label: 'Kilavuz (dis cekme)',
+    hint: 'Dis acar; simulasyonda silindirik kabul edilir.',
+    defaults: { diameter: 5, fluteLength: 20 },
+  },
+];
+
+export function getToolTypeInfo(id: ToolType): ToolTypeInfo {
+  return TOOL_TYPES.find((t) => t.id === id) ?? (TOOL_TYPES[0] as ToolTypeInfo);
+}
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   colorMode: 'kind',

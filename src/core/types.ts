@@ -181,11 +181,40 @@ export interface StockDefinition {
   material: StockMaterialId;
 }
 
+/**
+ * Kesici takim tipi (uc gecmesi).
+ *  - flat    : duz parmak freze
+ *  - ball    : kure uclu (ball nose)
+ *  - bull    : kose radyuslu (bull nose)
+ *  - vbit    : V uclu gravur
+ *  - drill   : matkap (helisel, tepe acili)
+ *  - spot    : punta/nokta matkabi (90 derece)
+ *  - chamfer : havsa / pah frezesi
+ *  - reamer  : rayba
+ *  - tap     : kilavuz (dis cekme)
+ */
+export type ToolType =
+  | 'flat'
+  | 'ball'
+  | 'bull'
+  | 'vbit'
+  | 'drill'
+  | 'spot'
+  | 'chamfer'
+  | 'reamer'
+  | 'tap';
+
 /** CNC kesici takim tanimi (Faz 6). */
 export interface ToolDefinition {
-  type: 'flat' | 'ball' | 'vbit';
+  type: ToolType;
   diameter: number; // mm
   fluteLength: number; // mm
+  /** Koni tepe acisi (derece) — matkap/V uc/havsa icin. */
+  angle?: number;
+  /** Kose radyusu (mm) — bull nose icin. */
+  cornerRadius?: number;
+  /** Ucun duz kalan kismi (mm) — havsa frezesi icin. */
+  tipDiameter?: number;
 }
 
 // ---------------------------------------------------------------------------
