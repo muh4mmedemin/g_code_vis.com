@@ -156,3 +156,16 @@ export function tokenizeLine(line: string, lineIndex: number): GcodeToken {
     lineIndex,
   };
 }
+
+/**
+ * Sayisi YAZILMIS parametre degeri.
+ *
+ * Tokenizer ciplak harfleri (ornek: "G28 X Y") params icine 0 olarak da
+ * koyar. Bu cogu yerde istenir ama F gibi modal degerlerde tehlikelidir:
+ * makro satirlarindaki "IF [#1 EQ 1] GOTO 100" ifadesindeki F, ilerleme
+ * hizini sessizce 0 yapardi. Modal deger okurken bu fonksiyon kullanilir.
+ */
+export function numericParam(token: GcodeToken, letter: ParamLetter): number | undefined {
+  if (token.bare.includes(letter)) return undefined;
+  return token.params[letter];
+}

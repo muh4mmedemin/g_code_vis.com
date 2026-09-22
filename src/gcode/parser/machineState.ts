@@ -83,6 +83,23 @@ export interface MachineState {
   spindleRpm: number;
   /** Aktif delme cevrimi (G80 ile temizlenir). */
   cannedCycle: CannedCycleState | null;
+  /**
+   * Bu SATIR icin G53 (makine koordinati) gecerli mi?
+   *
+   * G53 modal degildir; yalnizca yazildigi blokta gecerlidir. Ayni satirdaki
+   * hareket komutu bunu okuyup makine koordinatli hareketi is koordinatina
+   * gore cizmemek icin kullanir (bkz. commands.ts / referenceRetract).
+   */
+  machineCoordBlock: boolean;
+  /**
+   * Program boyunca ulasilan en yuksek Z (mm).
+   *
+   * G28/G30/G53 referans donuslerinde takimin nereye gittigini dosyadan
+   * bilemeyiz (makine sifiri bize kapali). Bilinen tek guvenli yukseklik
+   * programin kendi kullandigi en yuksek Z'dir; referans donusu bu seviyeye
+   * cikis olarak cizilir.
+   */
+  maxZ: number;
 
   // --- Yalnizca tani (diagnostic) uretimi icin izlenen bayraklar ----------
   /** G20/G21 goruldu mu? */
@@ -121,6 +138,8 @@ export function createInitialState(): MachineState {
     feedMode: 'perMinute',
     spindleRpm: 0,
     cannedCycle: null,
+    machineCoordBlock: false,
+    maxZ: 0,
     unitsDeclared: false,
     positioningDeclared: false,
     machineCoordReported: false,

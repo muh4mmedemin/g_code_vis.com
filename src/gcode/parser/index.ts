@@ -1,8 +1,14 @@
 import type { GcodeStats, Layer, Move, ParseDiagnostic, ParseResult } from '@/core/types';
 import { LAYER_Z_EPSILON } from '@/core/constants';
-import { tokenizeLine } from './tokenizer';
+import { numericParam, tokenizeLine } from './tokenizer';
 import { createInitialState, toMillimeters, type MachineState } from './machineState';
-import { COMMAND_HANDLERS, MODAL_REPEATABLE, MOTION_COMMANDS, getHandler } from './commands';
+import {
+  COMMAND_HANDLERS,
+  MODAL_MOTION_COMPANIONS,
+  MODAL_REPEATABLE,
+  MOTION_COMMANDS,
+  getHandler,
+} from './commands';
 import { buildToolpathBuffers } from '../buffers';
 import { computeStats } from '../stats';
 import {
@@ -116,6 +122,11 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
   let programEndLine: number | null = null;
 
   const emitMove = (move: Move): void => {
+    // Referans donusleri (G28/G30/G53) icin "guvenli yukseklik" olcutu:
+    // programin gercekte kullandigi en yuksek Z.
+    if (move.to.z > state.maxZ) state.maxZ = move.to.z;
+    if (move.from.z > state.maxZ) state.maxZ = move.from.z;
+
     // Is mili durumu hareketin YAPILDIGI anda onemlidir (program sonundaki
     // M5 sonradan bayragi kapatir), bu yuzden burada yakalanir.
     if (
@@ -152,6 +163,11 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
       if (line.trim().length === 0) continue;
 
       const token = tokenizeLine(line, i);
+
+      // G53 modal DEGILDIR: yalnizca yazildigi blokta gecerlidir. Bayrak her
+      // satirin basinda temizlenir, G53 handler'i ayni satirda (hareketten
+      // once) yeniden kurar.
+      state.machineCoordBlock = false;
 
       // Slicer'in katman yorumlari (varsa) sinir olarak kaydedilir.
       // Alt program tekrarlarinda ayni satir birden fazla gecebilir; ipucu
@@ -201,8 +217,9 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
 
       if (token.commands.length === 0) {
         // Komutsuz ama parametreli satir: "F3000" gibi modal feedrate atamalari.
-        if (token.params.F !== undefined) {
-          state.feedrate = toMillimeters(token.params.F, state.unit);
+        const feed = numericParam(token, 'F');
+        if (feed !== undefined) {
+          state.feedrate = toMillimeters(feed, state.unit);
         }
 
         // MODAL HAREKET: G-code'da hareket komutu kalicidir. "G1 X10 F300"
@@ -222,9 +239,37 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
         if (MOTION_COMMANDS.has(command)) continue;
         dispatch(command, token, ctx, pushDiagnostic, i);
       }
+      let hasMotionCommand = false;
       for (const command of token.commands) {
         if (!MOTION_COMMANDS.has(command)) continue;
+        hasMotionCommand = true;
         dispatch(command, token, ctx, pushDiagnostic, i);
+      }
+
+      if (!hasMotionCommand) {
+        // Hareket komutu olmayan satirdaki F yine de modaldir:
+        // "G94 F600." sonraki hareketlerin hizini belirler.
+        const feed = numericParam(token, 'F');
+        if (feed !== undefined) {
+          state.feedrate = toMillimeters(feed, state.unit);
+        }
+
+        // MODAL HAREKET (komutlu satir): satirdaki komutlarin hicbiri hareket
+        // uretmiyor ama eksen sozcugu var:
+        //   "G43 H1 Z15. M8"  -> guvenli Z'ye hizli cikis (Fusion/Fanuc posti)
+        //   "G53 G0" disindaki "G53 Z0." yazimi
+        // Gercek tezgah bu satirlari modal G0/G1 ile hareket ettirir; bu dal
+        // olmadan takim yolunda kopukluk olusur (ozellikle her takim
+        // degisiminden sonraki guvenli yukseklige cikis kaybolur).
+        const companionsOnly = token.commands.every((c) => MODAL_MOTION_COMPANIONS.has(c));
+        if (
+          companionsOnly &&
+          hasAxisWord(token) &&
+          state.motionMode &&
+          MODAL_REPEATABLE.has(state.motionMode)
+        ) {
+          dispatch(state.motionMode, token, ctx, pushDiagnostic, i);
+        }
       }
 
       if (options.onProgress && depth === 0 && i % progressStep === 0) {
@@ -363,16 +408,10 @@ function resolveDialect(lines: string[], forced?: string): Dialect | null {
 
 /** Satirda konum/yay belirten bir harf var mi? (modal hareket tekrari icin) */
 function hasAxisWord(token: ReturnType<typeof tokenizeLine>): boolean {
-  const p = token.params;
-  return (
-    p.X !== undefined ||
-    p.Y !== undefined ||
-    p.Z !== undefined ||
-    p.E !== undefined ||
-    p.I !== undefined ||
-    p.J !== undefined ||
-    p.K !== undefined ||
-    p.R !== undefined
+  // Ciplak harfler (sayisiz) sayilmaz: makro/metin satirlarindaki rastgele
+  // harfler ("IF [#1 EQ 1] GOTO 100" icindeki I) sahte hareket uretmemeli.
+  return (['X', 'Y', 'Z', 'E', 'I', 'J', 'K', 'R'] as const).some(
+    (letter) => numericParam(token, letter) !== undefined,
   );
 }
 

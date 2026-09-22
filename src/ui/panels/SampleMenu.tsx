@@ -90,6 +90,18 @@ const SAMPLES: SampleEntry[] = [
     },
   },
   {
+    label: 'Fanuc (N satir numarali)',
+    description: 'CAM ciktisi: her blok N numarali, G43 ile guvenli Z, G28 ile referans donusu',
+    file: 'cnc-fanuc-n-satir.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 80, y: 60, z: 20 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+      material: 'derlin-dogal',
+    },
+  },
+  {
     label: 'Modal kontur',
     description: 'Komut sozcugu tekrarlamayan tezgah kodu: kontur + kanal',
     file: 'cnc-modal-kontur.gcode',

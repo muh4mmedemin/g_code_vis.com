@@ -1,4 +1,4 @@
-import type { GcodeToken } from './tokenizer';
+import { numericParam, type GcodeToken } from './tokenizer';
 import type { CannedCycleState, MachineState } from './machineState';
 import { feedDuration, toMillimeters } from './machineState';
 import type { Move, MoveKind, ParseDiagnostic, Vec3 } from '@/core/types';
@@ -54,6 +54,44 @@ function distanceBetween(a: Vec3, b: Vec3): number {
   return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
 }
 
+/**
+ * Makine koordinatli referans donusu (G53 blogu, G28/G30 reference return).
+ *
+ * NEDEN AYRI: Bu hareketlerin hedefi MAKINE sifirina goredir; is sifirinin
+ * makineye gore nerede oldugu dosyada yazmaz. Hedefi is koordinati sanip
+ * cizmek, "G53 G0 Z0" / "G91 G28 Z0." gibi program sonu geri cekilmelerini
+ * parcanin icine dalan bir hareket gibi gosterir (tipik CAM ciktilarinda her
+ * takim degisiminde bir tane vardir; takim yolu bu yuzden "bozuk" gorunur).
+ *
+ * Bunun yerine, bilinen tek guvenli yukseklige — programin kendi kullandigi
+ * en yuksek Z'ye — cikis olarak cizilir; XY hic oynatilmaz. Hicbir zaman
+ * ASAGI inmez.
+ */
+function referenceRetract(token: GcodeToken, ctx: HandlerContext): void {
+  const { state } = ctx;
+  const targetZ = Math.max(state.position.z, state.maxZ);
+  if (targetZ - state.position.z <= 1e-9) return;
+
+  const from: Vec3 = { ...state.position };
+  const to: Vec3 = { x: from.x, y: from.y, z: targetZ };
+  const distance = distanceBetween(from, to);
+  state.position = to;
+
+  ctx.emitMove({
+    lineIndex: token.lineIndex,
+    kind: 'home',
+    from,
+    to,
+    e: 0,
+    f: state.feedrate,
+    layerIndex: 0,
+    tool: state.tool,
+    rapid: true,
+    distance,
+    duration: 0,
+  });
+}
+
 /** G0/G1 — dogrusal hareket. `rapid` yalnizca G0 icin true'dur. */
 function linearMove(rapid: boolean): CommandHandler {
   return (token, ctx) => {
@@ -61,6 +99,13 @@ function linearMove(rapid: boolean): CommandHandler {
   // Hareket komutu modaldir: sonraki komutsuz satirlar bunu tekrarlar.
   state.motionMode = rapid ? 'G0' : 'G1';
   state.cannedCycle = null;
+
+  // Ayni satirda G53 varsa koordinatlar MAKINE sifirina goredir.
+  if (state.machineCoordBlock) {
+    referenceRetract(token, ctx);
+    return;
+  }
+
   const from: Vec3 = { ...state.position };
 
   const to: Vec3 = {
@@ -69,8 +114,9 @@ function linearMove(rapid: boolean): CommandHandler {
     z: resolveAxis(token.params.Z, state.position.z, state.positioning, state.unit),
   };
 
-  if (token.params.F !== undefined) {
-    state.feedrate = toMillimeters(token.params.F, state.unit);
+  const feed = numericParam(token, 'F');
+  if (feed !== undefined) {
+    state.feedrate = toMillimeters(feed, state.unit);
   }
 
   const { newE, delta: deltaE } = resolveExtrusion(token, state);
@@ -78,6 +124,11 @@ function linearMove(rapid: boolean): CommandHandler {
 
   const distance = distanceBetween(from, to);
   state.position = to;
+
+  // Hicbir sey yapmayan satir ("G1 F600" veya ayni noktanin tekrari): CAM
+  // ciktilarinda sikca gecer. Segment uretmek yalnizca hareket sayisini ve
+  // render yukunu sisirir; state (feedrate/mod) zaten guncellendi.
+  if (distance === 0 && deltaE === 0) return;
 
   ctx.emitMove({
     lineIndex: token.lineIndex,
@@ -109,8 +160,9 @@ function handleArcMove(clockwise: boolean): CommandHandler {
       z: resolveAxis(token.params.Z, state.position.z, state.positioning, state.unit),
     };
 
-    if (token.params.F !== undefined) {
-      state.feedrate = toMillimeters(token.params.F, state.unit);
+    const feed = numericParam(token, 'F');
+    if (feed !== undefined) {
+      state.feedrate = toMillimeters(feed, state.unit);
     }
 
     const hasOffset =
@@ -207,9 +259,22 @@ function handleArcMove(clockwise: boolean): CommandHandler {
   };
 }
 
-/** G28 — home. Belirtilen eksenler (veya hepsi) 0'a gider. */
+/**
+ * G28 — home / referans donusu.
+ *
+ * Iki farkli dunyada ayni kod iki farkli sey demektir:
+ *  - 3B yazicida (G90 ile) "G28 X Y" eksenleri is sifirina, yani 0'a goturur.
+ *  - CNC tezgahinda tipik yazim "G91 G28 Z0." seklindedir ve MAKINE referans
+ *    noktasina (tablanin en ustune) donustur; is koordinatinda 0'a gitmek
+ *    degildir. Artimli modu olcut aliyoruz: bu yazim yalnizca CNC post
+ *    ciktilarinda gorulur.
+ */
 function handleHome(token: GcodeToken, ctx: HandlerContext): void {
   const { state } = ctx;
+  if (state.positioning === 'relative' || state.machineCoordBlock) {
+    referenceRetract(token, ctx);
+    return;
+  }
   const from: Vec3 = { ...state.position };
   const hasAxisParam =
     token.params.X !== undefined || token.params.Y !== undefined || token.params.Z !== undefined;
@@ -236,6 +301,14 @@ function handleHome(token: GcodeToken, ctx: HandlerContext): void {
     distance,
     duration: 0,
   });
+}
+
+/**
+ * G30 — ikinci/ucuncu referans noktasina donus (yalnizca CNC).
+ * Hedef makine koordinatidir; G28'in CNC yazimiyla ayni sekilde ele alinir.
+ */
+function handleSecondReference(token: GcodeToken, ctx: HandlerContext): void {
+  referenceRetract(token, ctx);
 }
 
 function handleAbsolutePositioning(_token: GcodeToken, ctx: HandlerContext): void {
@@ -383,8 +456,9 @@ function cannedCycle(command: string): CommandHandler {
     const prev = state.cannedCycle;
     const relative = state.positioning === 'relative';
 
-    if (token.params.F !== undefined) {
-      state.feedrate = toMillimeters(token.params.F, state.unit);
+    const feed = numericParam(token, 'F');
+    if (feed !== undefined) {
+      state.feedrate = toMillimeters(feed, state.unit);
     }
 
     // Cevrim baslamadan onceki Z (G98'de buraya donulur) yalnizca cevrimin
@@ -538,7 +612,7 @@ const IGNORED_COMMANDS = [
   'M7', 'M8', 'M9',
   // Is koordinat sistemleri ve telafi (geometriyi kabaca etkilemez)
   'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
-  'G40', 'G43', 'G49', 'G61', 'G64',
+  'G40', 'G43', 'G44', 'G49', 'G61', 'G64',
   // Ofset/telafi tablosu yazar; geometriyi dogrudan uretmez.
   'G10', 'G92.1', 'G92.2', 'G92.3',
   // Program akisi / alt program: index.ts akis kontrolunde ele alinir.
@@ -562,14 +636,17 @@ const IGNORED_COMMANDS = [
  * koordinatiyla cizip kullaniciyi bir kez uyaririz.
  */
 function handleMachineCoordinates(_token: GcodeToken, ctx: HandlerContext): void {
+  // G53 modal DEGILDIR: yalnizca bu blokta gecerli (index.ts her satir sonunda
+  // bayragi temizler).
+  ctx.state.machineCoordBlock = true;
   if (ctx.state.machineCoordReported) return;
   ctx.state.machineCoordReported = true;
   ctx.diagnostic({
     severity: 'warning',
     code: 'MACHINE_COORDINATES',
     message:
-      'G53 makine koordinati kullaniliyor; makine sifiri bilinmedigi icin hareket is ' +
-      'sifirina gore cizildi (gercek tezgahta farkli bir noktaya gider).',
+      'G53 makine koordinati kullaniliyor; makine sifiri bilinmedigi icin bu hareketler ' +
+      'gercek hedeflerine degil, programin en yuksek Z seviyesine geri cekilme olarak cizildi.',
   });
 }
 
@@ -589,6 +666,7 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   G2: handleArcMove(true),
   G3: handleArcMove(false),
   G28: handleHome,
+  G30: handleSecondReference,
   G4: handleDwell,
   // Modal durum
   G90: handleAbsolutePositioning,
@@ -651,7 +729,7 @@ export function getHandler(command: string): CommandHandler | undefined {
  * gelebilirler ("G0 G90 X10"); modal olanlar ONCE uygulanmalidir.
  */
 export const MOTION_COMMANDS = new Set([
-  'G0', 'G1', 'G2', 'G3', 'G28', 'G92', 'G4',
+  'G0', 'G1', 'G2', 'G3', 'G28', 'G30', 'G92', 'G4',
   // Delme cevrimleri de hareket uretir: ayni satirdaki G98/G99, G90/G91,
   // takim ve duzlem komutlari onlardan ONCE uygulanmalidir.
   'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
@@ -664,4 +742,24 @@ export const MOTION_COMMANDS = new Set([
 export const MODAL_REPEATABLE = new Set([
   'G0', 'G1', 'G2', 'G3',
   'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
+]);
+
+/**
+ * Hareket URETMEYEN ama ayni satirdaki MODAL hareketin calismasina engel
+ * olmayan komutlar.
+ *
+ * NEDEN: Gercek CAM ciktilarinda hareket komutu cogu zaman satirda yazmaz ama
+ * satir bos da degildir:
+ *   G43 H1 Z15. M8      -> takim boyu telafisi + guvenli Z'ye HIZLI CIKIS
+ *   G54 X0. Y0.         -> is sifiri + konumlanma
+ * Bu satirlar modal G0/G1 ile hareket eder. Liste bilincli olarak dardir:
+ * "M600 X10 Y10" (yazici filament degisim konumu) gibi eksen sozcugu tasiyan
+ * ama HAREKET ETMEYEN M kodlarinin sahte hareket uretmemesi gerekir.
+ */
+export const MODAL_MOTION_COMPANIONS = new Set([
+  'G17', 'G18', 'G19', 'G20', 'G21',
+  'G40', 'G41', 'G42', 'G43', 'G44', 'G49',
+  'G53', 'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
+  'G61', 'G64', 'G90', 'G91', 'G93', 'G94', 'G95', 'G98', 'G99',
+  'M3', 'M4', 'M5', 'M7', 'M8', 'M9',
 ]);
