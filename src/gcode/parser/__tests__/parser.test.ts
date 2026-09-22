@@ -116,7 +116,9 @@ describe('parseGcode — yaylar (G2/G3)', () => {
 
   it('R formunu destekler', () => {
     const r = parseGcode(g('G90', 'G1 X0 Y0', 'G2 X10 Y0 R5'));
-    const arcMoves = r.moves.slice(1);
+    // 'G1 X0 Y0' baslangic noktasini degistirmez ve hareket uretmez;
+    // yaya ait segmentler satir indeksiyle secilir.
+    const arcMoves = r.moves.filter((m) => m.lineIndex === 2);
     const last = arcMoves[arcMoves.length - 1];
     expect(last?.to.x).toBeCloseTo(10, 6);
     expect(last?.to.y).toBeCloseTo(0, 6);
@@ -157,7 +159,7 @@ describe('parseGcode — yaylar (G2/G3)', () => {
 
   it('gecersiz yayda duz cizgi cizip uyarir', () => {
     const r = parseGcode(g('G90', 'G1 X0 Y0', 'G2 X10 Y0'));
-    expect(r.moves).toHaveLength(2);
+    expect(r.moves.filter((m) => m.lineIndex === 2)).toHaveLength(1);
     expect(r.diagnostics.some((d) => d.code === 'INVALID_ARC')).toBe(true);
   });
 
@@ -540,7 +542,8 @@ describe('parseGcode — program akisi ve alt programlar', () => {
 
     // Alt programin hareketleri, cagri ile Z50 arasinda olmali.
     const kinds = r.moves.map((m) => `${m.to.x},${m.to.y},${m.to.z}`);
-    expect(kinds).toEqual(['0,0,0', '10,0,0', '10,10,0', '10,10,50']);
+    // 'G0 X0 Y0' takim zaten oradayken hareket uretmez.
+    expect(kinds).toEqual(['10,0,0', '10,10,0', '10,10,50']);
     expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
   });
 
@@ -628,5 +631,85 @@ describe('parseGcode — ek CNC komutlari', () => {
     // Her delik AYNI derinlikte olmali (tekrarlar ust uste inmemeli).
     const depths = plunges.map((m) => Number(m.to.z.toFixed(3)));
     expect(new Set(depths).size).toBe(1);
+  });
+});
+
+describe('parseGcode — CAM (N satir numarali, modal) programlari', () => {
+  it('N numarali ve komutu her satirda tekrarlayan konturu cizer', () => {
+    const r = parseGcode(
+      g(
+        'N7701 G21 G90 G94',
+        'N7703 M3 S8000',
+        'N7705 G1 X17.863 Y-18.3 F600.',
+        'N7707 G1 Y-18.9',
+        'N7709 G1 X17.936 Y-19.159',
+        'N7711 G1 X18.187 Y-19.279',
+        'N7713 G1 X18.434 Y-19.172',
+      ),
+    );
+    expect(r.moves).toHaveLength(5);
+    expect(r.moves[1]?.to).toEqual({ x: 17.863, y: -18.9, z: 0 });
+    expect(r.moves[4]?.to.x).toBeCloseTo(18.434);
+    expect(r.moves.every((m) => m.f === 600)).toBe(true);
+    expect(r.diagnostics.some((d) => d.severity === 'error')).toBe(false);
+  });
+
+  it('"G43 H1 Z15. M8" satirini modal G0 ile guvenli yukseklige cikarir', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S5000', 'G0 X10 Y10', 'G43 H1 Z15. M8', 'Z2.', 'G1 Z-1 F100'),
+    );
+    const retract = r.moves[1];
+    expect(retract?.to).toEqual({ x: 10, y: 10, z: 15 });
+    expect(retract?.rapid).toBe(true);
+    // Sonraki satir yine modal G0: guvenli yukseklikten yaklasma.
+    expect(r.moves[2]?.from.z).toBe(15);
+    expect(r.moves[2]?.to.z).toBe(2);
+  });
+
+  it('eksen sozcugu tasiyan ama hareket etmeyen M kodlarini hareket saymaz', () => {
+    // M600 (filament degisimi) X/Y tasir ama takimi programlanan yola goturmez.
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 Y10 F600', 'M600 X0 Y0', 'G1 X20'));
+    expect(r.moves).toHaveLength(2);
+    expect(r.moves[1]?.to).toEqual({ x: 20, y: 10, z: 0 });
+  });
+
+  it('G53/G28 referans donusunu parcaya dalan hareket olarak cizmez', () => {
+    const r = parseGcode(
+      g(
+        'G21', 'G90', 'M3 S5000',
+        'G0 X0 Y0',
+        'G0 Z15',
+        'G1 Z-3 F100',
+        'G1 X20',
+        'G0 Z15',
+        'G53 G0 Z0.',
+        'G91 G28 Z0.',
+        'G90',
+      ),
+    );
+    // Referans donusleri asagi inmez: en dusuk Z yalnizca kesim seviyesidir.
+    expect(Math.min(...r.moves.map((m) => m.to.z))).toBe(-3);
+    expect(r.moves[r.moves.length - 1]?.to.z).toBe(15);
+    expect(r.diagnostics.some((d) => d.code === 'MACHINE_COORDINATES')).toBe(true);
+  });
+
+  it('G30 ikinci referans donusunu bilinmeyen komut saymaz', () => {
+    const r = parseGcode(
+      g('G21', 'G90', 'M3 S5000', 'G0 Z10', 'G1 Z-2 F100', 'G0 Z10', 'G91 G30 Z0.', 'G90'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+    expect(r.moves.every((m) => m.to.z >= -2)).toBe(true);
+  });
+
+  it('yalnizca F degistiren satir hareket uretmez ama ilerlemeyi gunceller', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 F300', 'G1 F900', 'G1 X20'));
+    expect(r.moves).toHaveLength(2);
+    expect(r.moves[1]?.f).toBe(900);
+  });
+
+  it('sayisiz F harfi (makro satiri) ilerleme hizini sifirlamaz', () => {
+    const r = parseGcode(g('G21', 'G90', 'G1 X10 F500', 'IF [#1 EQ 1] GOTO 100', 'G1 X20'));
+    expect(r.moves[r.moves.length - 1]?.f).toBe(500);
+    expect(r.diagnostics.some((d) => d.code === 'ZERO_FEEDRATE')).toBe(false);
   });
 });
