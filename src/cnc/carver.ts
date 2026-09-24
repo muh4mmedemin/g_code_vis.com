@@ -28,6 +28,97 @@ function isCuttingMove(move: Move): boolean {
 }
 
 /**
+ * Takimin belirli bir XY kolonunda ULASTIGI en dusuk yuzey Z'si.
+ * Yol disinda kalan kolonlarda null doner.
+ *
+ * Yalnizca en yakin noktanin Z'sine bakmak yanlis olur: dikey bir dalmada
+ * (delik delme) XY izdusumu sifir uzunluktadir, en yakin nokta hep
+ * baslangictir ve hicbir talas kalkmazdi. Dogrusu, takimin bu kolonun
+ * yaricapi icinde kaldigi [tMin, tMax] araligina bakmaktir; Z dogrusal
+ * degistigi icin en dusuk deger uclardan biridir.
+ */
+function toolSurfaceZ(
+  move: Move,
+  tool: ToolDefinition,
+  cx: number,
+  cy: number,
+  radius: number,
+): number | null {
+  const { from, to } = move;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const lengthSq = dx * dx + dy * dy;
+  const lengthXY = Math.sqrt(lengthSq);
+  const radiusSq = radius * radius;
+
+  let t = 0;
+  if (lengthSq > 1e-12) {
+    t = ((cx - from.x) * dx + (cy - from.y) * dy) / lengthSq;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+  }
+  const px = from.x + dx * t;
+  const py = from.y + dy * t;
+  const distSq = (cx - px) * (cx - px) + (cy - py) * (cy - py);
+  if (distSq > radiusSq) return null;
+
+  let tMin = 0;
+  let tMax = 1;
+  if (lengthXY > 1e-9) {
+    const halfSpan = Math.sqrt(Math.max(0, radiusSq - distSq)) / lengthXY;
+    tMin = Math.max(0, t - halfSpan);
+    tMax = Math.min(1, t + halfSpan);
+  }
+  const tipZ = Math.min(from.z + dz * tMin, from.z + dz * tMax);
+
+  // Ucun sekli: eksenden uzaklastikca taban yukselir (kure/koni ucta).
+  const profileLift = tipHeightAtRadius(tool, Math.sqrt(distSq));
+  if (!Number.isFinite(profileLift)) return null;
+  return tipZ + profileLift;
+}
+
+/**
+ * Islenmis yuzey alanini (purüzsuz gosterim) gunceller.
+ *
+ * NEDEN AYRI DONGU: Yuzey alani voxel grid'inden daha incedir; kesim
+ * kenarlarinin XY'de basamakli gorunmemesi icin gereken cozunurluk budur
+ * (bkz. VoxelGrid.surfaceFactor).
+ */
+function carveSurface(grid: VoxelGrid, move: Move, tool: ToolDefinition, radius: number): void {
+  const { from, to } = move;
+  const [si0, sj0] = grid.worldToSurfaceCell(
+    Math.min(from.x, to.x) - radius,
+    Math.min(from.y, to.y) - radius,
+  );
+  const [si1, sj1] = grid.worldToSurfaceCell(
+    Math.max(from.x, to.x) + radius,
+    Math.max(from.y, to.y) + radius,
+  );
+
+  const iStart = Math.max(0, si0);
+  const iEnd = Math.min(grid.surfaceDims.nx - 1, si1);
+  const jStart = Math.max(0, sj0);
+  const jEnd = Math.min(grid.surfaceDims.ny - 1, sj1);
+
+  const size = grid.surfaceCellSize;
+  for (let si = iStart; si <= iEnd; si++) {
+    const cx = grid.min.x + (si + 0.5) * size;
+    for (let sj = jStart; sj <= jEnd; sj++) {
+      const cy = grid.min.y + (sj + 0.5) * size;
+      const surfaceZ = toolSurfaceZ(move, tool, cx, cy, radius);
+      if (surfaceZ === null) continue;
+      if (grid.lowerSurface(si, sj, surfaceZ)) {
+        grid.markDirtyAt(
+          Math.floor(si / grid.surfaceFactor),
+          Math.floor(sj / grid.surfaceFactor),
+          0,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Tek bir kesme hareketinin supurdugu hacmi bosaltir.
  * @returns kaldirilan hucre sayisi
  */
@@ -54,55 +145,16 @@ export function carveMove(grid: VoxelGrid, move: Move, tool: ToolDefinition): nu
   const jEnd = Math.min(grid.dims.ny - 1, j1);
   if (iStart > iEnd || jStart > jEnd) return 0;
 
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dz = to.z - from.z;
-  const lengthSq = dx * dx + dy * dy;
-  const lengthXY = Math.sqrt(lengthSq);
-  const radiusSq = radius * radius;
-
   let removed = 0;
+
+  carveSurface(grid, move, tool, radius);
 
   for (let i = iStart; i <= iEnd; i++) {
     const cx = grid.min.x + (i + 0.5) * grid.cellSize;
     for (let j = jStart; j <= jEnd; j++) {
       const cy = grid.min.y + (j + 0.5) * grid.cellSize;
-
-      // Kolon merkezinin yola (XY izdusumune) en yakin noktasi.
-      let t = 0;
-      if (lengthSq > 1e-12) {
-        t = ((cx - from.x) * dx + (cy - from.y) * dy) / lengthSq;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-      }
-      const px = from.x + dx * t;
-      const py = from.y + dy * t;
-      const distSq = (cx - px) * (cx - px) + (cy - py) * (cy - py);
-      if (distSq > radiusSq) continue;
-
-      // Takim ucunun bu kolonda ULASTIGI EN DUSUK Z.
-      //
-      // Yalnizca en yakin noktanin Z'sine bakmak yanlis olur: dikey bir
-      // dalmada (delik delme) XY izdusumu sifir uzunluktadir, en yakin nokta
-      // hep baslangictir ve hicbir talas kalkmazdi. Dogrusu, takimin bu
-      // kolonun yaricapi icinde kaldigi [tMin, tMax] araligina bakmaktir;
-      // Z dogrusal degistigi icin en dusuk deger uclardan biridir.
-      let tMin = 0;
-      let tMax = 1;
-      if (lengthXY > 1e-9) {
-        const halfSpan = Math.sqrt(Math.max(0, radiusSq - distSq)) / lengthXY;
-        tMin = Math.max(0, t - halfSpan);
-        tMax = Math.min(1, t + halfSpan);
-      }
-      const tipZ = Math.min(from.z + dz * tMin, from.z + dz * tMax);
-
-      // Ucun sekli: eksenden uzaklastikca taban yukselir (kure/koni ucta).
-      const profileLift = tipHeightAtRadius(tool, Math.sqrt(distSq));
-      if (!Number.isFinite(profileLift)) continue;
-
-      // Islenmis yuzeyin GERCEK Z'si (hucre boyuna yuvarlanmamis): purüzsuz
-      // yuzey modu bunu kullanir, voxel modu asagidaki hucre temizligini.
-      const surfaceZ = tipZ + profileLift;
-      if (grid.lowerSurface(i, j, surfaceZ)) grid.markDirtyAt(i, j, 0);
+      const surfaceZ = toolSurfaceZ(move, tool, cx, cy, radius);
+      if (surfaceZ === null) continue;
 
       // Ucun uzerindeki her sey kalkar: uc yuzeyinden grid'in tepesine kadar.
       let kStart = Math.floor((surfaceZ - grid.min.z) / grid.cellSize);
