@@ -450,6 +450,24 @@ function handleOffsetTableWrite(token: GcodeToken, ctx: HandlerContext): void {
   else state.radiusOffsets.set(p, (state.radiusOffsets.get(p) ?? 0) + radius);
 }
 
+/**
+ * G16 — kutupsal koordinat modu (X = yaricap, Y = aci).
+ *
+ * Desteklemiyoruz; ama SESSIZ kalmak tehlikelidir: koordinatlar kartezyen
+ * sanilirsa program bambaska bir yere cizilir. Bu yuzden acik uyari verilir.
+ */
+function handlePolarOn(_token: GcodeToken, ctx: HandlerContext): void {
+  if (ctx.state.polarReported) return;
+  ctx.state.polarReported = true;
+  ctx.diagnostic({
+    severity: 'warning',
+    code: 'POLAR_NOT_SUPPORTED',
+    message:
+      'G16 kutupsal koordinat modu desteklenmiyor; bu bolumdeki X/Y degerleri ' +
+      'yaricap/aci olarak degil, oldugu gibi cizildi. G15 ile kapatilan bolumler dogrudur.',
+  });
+}
+
 function handleAbsolutePositioning(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.positioning = 'absolute';
   ctx.state.positioningDeclared = true;
@@ -761,6 +779,9 @@ const IGNORED_COMMANDS = [
   // Genisletilmis is sifirlari ve makro cagrilari: geometriyi dogrudan
   // uretmezler (makro govdesi dosyada yoksa hesaplanamaz da).
   'G54.1', 'G65', 'G66', 'G67',
+  // G29: referans noktasindan donus (CNC) / tabla taramasi (yazici).
+  // G31: olcum probu ile "skip" hareketi — probun nerede duracagi bilinemez.
+  'G29', 'G31', 'G15',
   'G92.1', 'G92.2', 'G92.3',
   // Program akisi / alt program: index.ts akis kontrolunde ele alinir.
   'M98', 'M99',
@@ -858,6 +879,7 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   'G51.1': handleMirrorOn,
   'G50.1': handleMirrorOff,
   G10: handleOffsetTableWrite,
+  G16: handlePolarOn,
   G93: setFeedMode('inverseTime'),
   G94: setFeedMode('perMinute'),
   G95: setFeedMode('perRevolution'),

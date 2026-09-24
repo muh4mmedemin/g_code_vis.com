@@ -67,6 +67,34 @@ Uygulama notlari:
  - Ileride: kure uclu takim destegi ve carve/mesh isleminin kendi
    worker'ina alinmasi (`gcode/worker/` ile ayni protokol deseni).
 
+### 4.1 Islenmis yuzey gosterimi (voxel / purüzsuz)
+
+Kesim modeli 2.5D oldugu icin (ucun uzerindeki her sey kalkar) islenmis blok
+matematiksel olarak bir **yukseklik alanidir**. Bu yuzden grid iki temsili
+birlikte tutar:
+
+| Temsil | Nerede | Ne icin |
+|---|---|---|
+| `VoxelGrid.data` (hucre dolu/bos) | `mesher.ts` | Hucreli gosterim, hacim sayimi, testler |
+| `VoxelGrid.surface` (kolon basina gercek Z) | `surfaceMesher.ts` | Purüzsuz gosterim |
+
+Purüzsuz mesh yuzeyi hucre boyuna yuvarlamaz; komsu kolonlar arasindaki fark
+`1.5 * hucre`yi asarsa yumusatma yapmaz, araya dik duvar koyar (freze dik
+duvar birakir). Tek parca uretildigi icin oynatmada 80 ms ile kisilir.
+Secim: `ViewSettings.stockSurface` ('smooth' varsayilan).
+
+## 4.2 Kesici yaricap telafisi (G41/G42)
+
+Telafi parse'in SONUNDA, tum yol bilinirken uygulanir
+(`gcode/parser/cutterComp.ts`): bir hareketin kaydirilmis bitis noktasi bir
+sonraki hareketin yonune baglidir, satir satir yorumlanirken bu bilgi yoktur.
+Parser yalnizca "su hareketler G41/G42 altinda uretildi" araliklarini
+biriktirir.
+
+Yaricap kaynagi sirayla: programdaki `G10 L12/L13` tablosu -> uygulamanin
+gecirdigi `ParseOptions.toolRadius` (CNC panelindeki takim capi) -> yoksa
+telafi uygulanmaz ve uyari verilir.
+
 ## 5. Performans kararlari (dokumandaki acik sorularin cevabi)
 
 | Soru | Karar |
@@ -81,12 +109,12 @@ Uygulama notlari:
 | Yol | Sorumluluk |
 |---|---|
 | `src/core/` | Tipler ve sabitler — veri sozlesmesi |
-| `src/gcode/parser/` | Tokenizer, modal makine durumu, komut handler registry'si |
+| `src/gcode/parser/` | Tokenizer, modal makine durumu, komut handler registry'si, kesici telafisi |
 | `src/gcode/dialects/` | Slicer'a ozgu yorum/katman ipuclari |
 | `src/gcode/worker/` | Worker protokolu, worker govdesi, Promise istemcisi |
 | `src/viewer/core/` | SceneManager, kamera, SceneLayer arayuzu |
 | `src/viewer/layers/` | Grid, calisma hacmi, toolpath, takim basligi |
-| `src/cnc/` | Voxel grid, carver, mesher, StockLayer (Faz 6) |
+| `src/cnc/` | Voxel grid, carver, mesher + purüzsuz yuzey mesher'i, StockLayer |
 | `src/state/` | zustand slice'lari |
 | `src/editor/` | CodeMirror editoru ve G-code dil tanimi |
 | `src/ui/` | Panel/overlay bilesenleri |

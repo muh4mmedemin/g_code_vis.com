@@ -230,6 +230,8 @@ export interface MachineState {
   positioningDeclared: boolean;
   /** G53 uyarisi verildi mi? (satir basina degil, dosya basina bir kez) */
   machineCoordReported: boolean;
+  /** G16 (kutupsal) uyarisi verildi mi? */
+  polarReported: boolean;
   /** M3/M4 ile is mili calistirildi mi? */
   spindleOn: boolean;
   /**
@@ -272,6 +274,7 @@ export function createInitialState(): MachineState {
     unitsDeclared: false,
     positioningDeclared: false,
     machineCoordReported: false,
+    polarReported: false,
     spindleOn: false,
     spindleOffCutLine: null,
   };

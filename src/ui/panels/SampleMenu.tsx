@@ -90,6 +90,18 @@ const SAMPLES: SampleEntry[] = [
     },
   },
   {
+    label: 'Kesici telafili kontur (G41)',
+    description: 'Programdaki hat parcanin kenari; takim yaricapi kadar disarida isler',
+    file: 'cnc-telafili-kontur.gcode',
+    mode: 'cnc',
+    stock: {
+      size: { x: 80, y: 60, z: 20 },
+      origin: { x: 0, y: 0, z: 0 },
+      toolDiameter: 6,
+      material: 'derlin-mavi',
+    },
+  },
+  {
     label: 'Fanuc (N satir numarali)',
     description: 'CAM ciktisi: her blok N numarali, G43 ile guvenli Z, G28 ile referans donusu',
     file: 'cnc-fanuc-n-satir.gcode',

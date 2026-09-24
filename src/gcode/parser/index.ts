@@ -246,6 +246,13 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
         if (hint) layerHints.push({ lineIndex: i, z: hint.z });
       }
 
+      // Telafi acikken yazilan D, ofset numarasini degistirir (tezgahta yeni
+      // yaricap o satirdan itibaren gecerlidir).
+      if (state.cutterComp !== null) {
+        const d = numericParam(token, 'D');
+        if (d !== undefined) state.cutterCompD = d;
+      }
+
       if (token.params.A !== undefined || token.params.B !== undefined || token.params.C !== undefined) {
         if (rotaryLine === null) rotaryLine = i;
       }
