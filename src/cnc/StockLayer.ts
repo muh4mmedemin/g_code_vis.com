@@ -5,6 +5,10 @@ import { getStockMaterial } from '@/core/constants';
 import { VoxelGrid } from './VoxelGrid';
 import { carveRange } from './carver';
 import { meshChunk } from './mesher';
+import { meshSurface } from './surfaceMesher';
+
+/** Purüzsuz yuzey mesh'inin en sik yeniden uretilme araligi (ms). */
+const SURFACE_REBUILD_MS = 80;
 
 /**
  * Ham malzeme blogu ve uzerinde talas kaldirma simulasyonu (Faz 6).
@@ -27,6 +31,17 @@ export class StockLayer implements SceneLayer {
   private grid: VoxelGrid | null = null;
   /** chunkIndex -> mesh */
   private chunkMeshes = new Map<number, THREE.Mesh>();
+  /** Purüzsuz mod: tek parca yuzey mesh'i. */
+  private surfaceMesh: THREE.Mesh | null = null;
+  /**
+   * Yuzey gosterimi:
+   *  - 'voxel'  : hucre kutuculari (freze izini oldugu gibi, basamakli)
+   *  - 'smooth' : kesilen yerler purüzsuz (bkz. surfaceMesher.ts)
+   */
+  private surfaceMode: 'voxel' | 'smooth' = 'voxel';
+  /** Purüzsuz mesh'in son uretim zamani (throttle icin). */
+  private lastSurfaceBuild = 0;
+  private pendingSurfaceBuild: ReturnType<typeof setTimeout> | null = null;
 
   private moves: Move[] = [];
   /** Su ana kadar islenmis hareket sayisi (imlecin tamsayi kismi). */
@@ -66,8 +81,9 @@ export class StockLayer implements SceneLayer {
     this.carvedUpTo = 0;
 
     this.disposeChunks();
+    this.disposeSurface();
     this.recarveFromStart(this.carveTarget());
-    this.updateDirtyChunks();
+    this.updateMesh();
     this.ctx?.requestRender();
   }
 
@@ -84,6 +100,16 @@ export class StockLayer implements SceneLayer {
     this.material.needsUpdate = true;
   }
 
+  /** Yuzey gosterimini degistirir (mevcut kesim korunur, yalnizca mesh yenilenir). */
+  setSurfaceMode(mode: 'voxel' | 'smooth'): void {
+    if (mode === this.surfaceMode) return;
+    this.surfaceMode = mode;
+    this.disposeChunks();
+    this.disposeSurface();
+    this.grid?.markAllDirty();
+    this.updateMesh();
+  }
+
   setVisible(visible: boolean): void {
     this.visible = visible;
     if (this.group) this.group.visible = visible && this.grid !== null;
@@ -97,7 +123,7 @@ export class StockLayer implements SceneLayer {
       this.grid.fill();
       this.carvedUpTo = 0;
       this.recarveFromStart(this.carveTarget());
-      this.updateDirtyChunks();
+      this.updateMesh();
     }
     this.ctx?.requestRender();
   }
@@ -117,7 +143,7 @@ export class StockLayer implements SceneLayer {
 
     carveRange(this.grid, this.moves, this.carvedUpTo, target, this.tool);
     this.carvedUpTo = target;
-    this.updateDirtyChunks();
+    this.updateMesh();
   }
 
   /** Blogun islenmesi gereken nokta: simulasyon imlecinin bulundugu yer. */
@@ -129,6 +155,71 @@ export class StockLayer implements SceneLayer {
     if (!this.grid) return;
     carveRange(this.grid, this.moves, 0, target, this.tool);
     this.carvedUpTo = target;
+  }
+
+  /** Aktif gosterime gore mesh'i tazeler. */
+  private updateMesh(): void {
+    if (this.surfaceMode === 'smooth') this.updateSurfaceMesh();
+    else this.updateDirtyChunks();
+  }
+
+  /**
+   * Purüzsuz mod: yukseklik alanindan tek parca yuzey. Kesim degistiginde
+   * bastan uretilir — chunk'lara bolunmez, cunku yuzey normalleri komsu
+   * kolonlara bakar ve parca sinirlarinda dikis izi olusurdu.
+   */
+  private updateSurfaceMesh(): void {
+    const grid = this.grid;
+    const group = this.group;
+    if (!grid || !group || !this.material) return;
+    if (grid.dirtyChunks.size === 0 && this.surfaceMesh) return;
+
+    // Yuzey tek parca uretildigi icin her kesme adiminda yeniden kurmak
+    // oynatmayi yavaslatir. Hizli oynatmada uretim kisilir; son durum her
+    // zaman kuyruga alinan bir cagriyla yakalanir.
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (this.surfaceMesh && now - this.lastSurfaceBuild < SURFACE_REBUILD_MS) {
+      if (this.pendingSurfaceBuild === null) {
+        this.pendingSurfaceBuild = setTimeout(() => {
+          this.pendingSurfaceBuild = null;
+          this.updateSurfaceMesh();
+        }, SURFACE_REBUILD_MS);
+      }
+      return;
+    }
+    this.lastSurfaceBuild = now;
+
+    const buffers = meshSurface(grid);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(buffers.positions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(buffers.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(buffers.indices, 1));
+
+    if (this.surfaceMesh) {
+      this.surfaceMesh.geometry.dispose();
+      this.surfaceMesh.geometry = geometry;
+    } else {
+      const mesh = new THREE.Mesh(geometry, this.material);
+      mesh.userData.measurable = true;
+      this.surfaceMesh = mesh;
+      group.add(mesh);
+    }
+
+    grid.dirtyChunks.clear();
+    group.visible = this.visible;
+    this.ctx?.requestRender();
+  }
+
+  private disposeSurface(): void {
+    if (this.pendingSurfaceBuild !== null) {
+      clearTimeout(this.pendingSurfaceBuild);
+      this.pendingSurfaceBuild = null;
+    }
+    if (this.surfaceMesh && this.group) {
+      this.group.remove(this.surfaceMesh);
+      this.surfaceMesh.geometry.dispose();
+    }
+    this.surfaceMesh = null;
   }
 
   /** Kirli chunk'lari yeniden mesh'ler (temiz olanlara dokunmaz). */
@@ -183,6 +274,7 @@ export class StockLayer implements SceneLayer {
 
   dispose(): void {
     this.disposeChunks();
+    this.disposeSurface();
     this.material?.dispose();
     this.material = null;
     if (this.group) {

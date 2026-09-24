@@ -17,7 +17,11 @@ export type ParamLetter =
   /** Tekrar sayisi (delme cevrimleri, alt program cagrilari). */
   | 'L'
   /** Doner eksenler — konum hesabinda kullanilmaz, yalnizca uyari uretir. */
-  | 'A' | 'B' | 'C';
+  | 'A' | 'B' | 'C'
+  /** Takim boyu telafi numarasi (G43 H1) — ofset tablosu bizde yok, izlenir. */
+  | 'H'
+  /** Kesici yaricap telafi numarasi (G41/G42 D1). */
+  | 'D';
 
 export interface GcodeToken {
   /**
@@ -39,7 +43,7 @@ export interface GcodeToken {
   lineIndex: number;
 }
 
-const PARAM_LETTERS = 'XYZEFIJKRSPTQLABC';
+const PARAM_LETTERS = 'XYZEFIJKRSPTQLABCHD';
 
 /**
  * Harf + (opsiyonel) sayi ciftleri.
@@ -55,6 +59,8 @@ const WORD_RE = /([A-Z])[ \t]*([-+]?(?:\d+\.?\d*|\.\d+))?/g;
  *  - ';' ile satir sonu yorumlari
  *  - '(' ... ')' ile inline yorumlar (CNC'de yaygin), kapanmamis parantez dahil
  *  - '%' program sinirlayicisi (CNC) — yok sayilir
+ *  - '/' blok silme isareti (block delete) — atilir, satir yine islenir
+ *  - "N1 ERKEK" gibi yalnizca metin tasiyan etiket satirlari — yorum sayilir
  *  - checksum'lu satirlar: "N123 G1 X10 *45" (N.. ve *.. atilir)
  *  - bosluksuz yazim: "G1X10Y20"
  *  - tek satirda birden fazla komut: "G90 G21", "G0 G90 X10"
@@ -103,6 +109,11 @@ export function tokenizeLine(line: string, lineIndex: number): GcodeToken {
   // '%' program basi/sonu isareti (CNC): satirda baska bir sey yoksa yok say.
   if (working === '%') return empty(comment);
 
+  // Blok silme (block delete): "/N100 G0 X0" ya da "/2 N100 ...". Tezgahta
+  // anahtar kapaliyken bu satirlar CALISIR; biz de calistiriyoruz, yalnizca
+  // isareti atiyoruz ki satir numarasi ve komutlar duzgun okunsun.
+  working = working.replace(/^\/\s*\d?\s*/, '');
+
   // Checksum: "*NN" satir sonunda olur, atilir.
   working = working.replace(/\*\s*\d+\s*$/, '').trim();
   // Satir numarasi: "N123 ..." — komut degil, atilir.
@@ -114,6 +125,15 @@ export function tokenizeLine(line: string, lineIndex: number): GcodeToken {
   const commands: string[] = [];
   const params: Partial<Record<ParamLetter, number>> = {};
   const bare: ParamLetter[] = [];
+
+  // "N1 ERKEK" / "PARCA A" gibi yalnizca metinden olusan satirlar: Mastercam
+  // ve elle yazilmis programlarda parca adi boyle yazilir. Sayisi olan tek bir
+  // sozcuk bile yoksa satir KOD DEGILDIR; harflerini parametre sanmak
+  // ("ERKEK" -> E, R, K) sahte degerler uretir.
+  if (!/[A-Z][ \t]*[-+]?(?:\d+\.?\d*|\.\d+)/.test(working)) {
+    addComment(working);
+    return empty(comment);
+  }
 
   WORD_RE.lastIndex = 0;
   let match: RegExpExecArray | null;

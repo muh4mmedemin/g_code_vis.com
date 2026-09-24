@@ -148,6 +148,9 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   showAxes: true,
   isolateLayer: false,
   renderMode: 'lines',
+  // Varsayilan purüzsuz: kullanicinin gordugu sey tezgahtan cikacak parcadir,
+  // simulasyonun hucre yapisi degil.
+  stockSurface: 'smooth',
 };
 
 /** Solid render'daki extrusion "bead"inin genislik/yukseklik varsayilanlari (mm). */

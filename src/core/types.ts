@@ -226,6 +226,15 @@ export type ColorMode = 'kind' | 'layer' | 'feedrate' | 'tool';
 /** Toolpath'in nasil cizilecegi: ince cizgiler mi, dolgun/yuzeyli 3D mi. */
 export type RenderMode = 'lines' | 'solid';
 
+/**
+ * CNC'de islenmis blogun yuzeyi nasil gosterilecek:
+ *  - 'voxel'  : simulasyon hucreleri oldugu gibi — basamakli, hangi hucrenin
+ *               kalktigi net gorunur (tanilama icin).
+ *  - 'smooth' : kesilen yerler purüzsuz — takimin gercekte indigi yukseklige
+ *               gore surekli yuzey; duvarlar dik kalir (bkz. surfaceMesher).
+ */
+export type StockSurfaceMode = 'voxel' | 'smooth';
+
 export interface ViewSettings {
   colorMode: ColorMode;
   /** Takim yolu hic cizilsin mi? (CNC'de islenmis parcayi incelemek icin) */
@@ -237,4 +246,6 @@ export interface ViewSettings {
   /** Tek katman izole modu. */
   isolateLayer: boolean;
   renderMode: RenderMode;
+  /** CNC: islenmis blogun yuzey gosterimi. */
+  stockSurface: StockSurfaceMode;
 }

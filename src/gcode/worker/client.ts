@@ -12,9 +12,15 @@ export interface ParseHandle {
 
 let requestCounter = 0;
 
+export interface ParseRequestOptions {
+  /** G41/G42 telafisinde kullanilacak takim yaricapi (mm). */
+  toolRadius?: number;
+}
+
 export function parseInWorker(
   source: string,
   onProgress?: (ratio: number) => void,
+  options: ParseRequestOptions = {},
 ): ParseHandle {
   const worker = new Worker(new URL('./parser.worker.ts', import.meta.url), { type: 'module' });
   const id = ++requestCounter;
@@ -46,7 +52,7 @@ export function parseInWorker(
       worker.terminate();
     };
 
-    const request: WorkerRequest = { type: 'parse', id, source };
+    const request: WorkerRequest = { type: 'parse', id, source, toolRadius: options.toolRadius };
     worker.postMessage(request);
   });
 

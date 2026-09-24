@@ -99,8 +99,13 @@ export function carveMove(grid: VoxelGrid, move: Move, tool: ToolDefinition): nu
       const profileLift = tipHeightAtRadius(tool, Math.sqrt(distSq));
       if (!Number.isFinite(profileLift)) continue;
 
+      // Islenmis yuzeyin GERCEK Z'si (hucre boyuna yuvarlanmamis): purüzsuz
+      // yuzey modu bunu kullanir, voxel modu asagidaki hucre temizligini.
+      const surfaceZ = tipZ + profileLift;
+      if (grid.lowerSurface(i, j, surfaceZ)) grid.markDirtyAt(i, j, 0);
+
       // Ucun uzerindeki her sey kalkar: uc yuzeyinden grid'in tepesine kadar.
-      let kStart = Math.floor((tipZ + profileLift - grid.min.z) / grid.cellSize);
+      let kStart = Math.floor((surfaceZ - grid.min.z) / grid.cellSize);
       if (kStart < 0) kStart = 0;
       for (let k = kStart; k < grid.dims.nz; k++) {
         if (grid.clearCell(i, j, k)) removed++;

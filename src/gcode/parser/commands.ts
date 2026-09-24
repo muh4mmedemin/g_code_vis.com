@@ -1,6 +1,6 @@
 import { numericParam, type GcodeToken } from './tokenizer';
 import type { CannedCycleState, MachineState } from './machineState';
-import { feedDuration, toMillimeters } from './machineState';
+import { createIdentityTransform, feedDuration, toMillimeters } from './machineState';
 import type { Move, MoveKind, ParseDiagnostic, Vec3 } from '@/core/types';
 import { segmentArc } from './arcs';
 
@@ -124,11 +124,6 @@ function linearMove(rapid: boolean): CommandHandler {
 
   const distance = distanceBetween(from, to);
   state.position = to;
-
-  // Hicbir sey yapmayan satir ("G1 F600" veya ayni noktanin tekrari): CAM
-  // ciktilarinda sikca gecer. Segment uretmek yalnizca hareket sayisini ve
-  // render yukunu sisirir; state (feedrate/mod) zaten guncellendi.
-  if (distance === 0 && deltaE === 0) return;
 
   ctx.emitMove({
     lineIndex: token.lineIndex,
@@ -311,6 +306,168 @@ function handleSecondReference(token: GcodeToken, ctx: HandlerContext): void {
   referenceRetract(token, ctx);
 }
 
+/** Verilen eksen sozcugunu mm'ye cevirir (yoksa undefined). */
+function axisMm(token: GcodeToken, letter: 'X' | 'Y' | 'Z', state: MachineState): number | undefined {
+  const value = numericParam(token, letter);
+  return value === undefined ? undefined : toMillimeters(value, state.unit);
+}
+
+/**
+ * G52 — yerel koordinat sistemi kaymasi.
+ * "G52 X50 Y0" sonrasi programlanan her koordinat 50 mm saga kayar; "G52 X0"
+ * iptal eder. Ayni programla ayni parcayi tablanin baska bir yerinde islemek
+ * icin kullanilir.
+ */
+function handleLocalOffset(token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  const t = ctx.state.transform;
+  const x = axisMm(token, 'X', ctx.state);
+  const y = axisMm(token, 'Y', ctx.state);
+  const z = axisMm(token, 'Z', ctx.state);
+  if (x !== undefined) t.offset.x = x;
+  if (y !== undefined) t.offset.y = y;
+  if (z !== undefined) t.offset.z = z;
+}
+
+/** G68 — koordinat dondurme (R = derece, merkez X/Y aktif duzlemde). */
+function handleRotationOn(token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  const { state } = ctx;
+  const t = state.transform;
+  const angle = numericParam(token, 'R');
+  if (angle === undefined) {
+    ctx.diagnostic({
+      severity: 'warning',
+      code: 'ROTATION_NO_ANGLE',
+      message: 'G68 dondurme acisi (R) verilmemis; dondurme uygulanmadi.',
+    });
+    return;
+  }
+  t.rotationDeg = angle;
+  t.rotationPlane = state.plane;
+  t.rotationCenter = {
+    x: axisMm(token, 'X', state) ?? state.position.x,
+    y: axisMm(token, 'Y', state) ?? state.position.y,
+    z: axisMm(token, 'Z', state) ?? state.position.z,
+  };
+}
+
+/** G69 — dondurmeyi iptal eder. */
+function handleRotationOff(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  ctx.state.transform.rotationDeg = 0;
+}
+
+/** G51 — olcekleme (P: tum eksenler, X/Y/Z: eksen basina carpan). */
+function handleScalingOn(token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  const { state } = ctx;
+  const t = state.transform;
+  t.scaleCenter = {
+    x: axisMm(token, 'X', state) ?? 0,
+    y: axisMm(token, 'Y', state) ?? 0,
+    z: axisMm(token, 'Z', state) ?? 0,
+  };
+  // Fanuc'ta P olcek carpani 1/1000 birimindedir: P2000 = 2 kat.
+  const p = numericParam(token, 'P');
+  const factor = p !== undefined ? (Math.abs(p) > 100 ? p / 1000 : p) : undefined;
+  const i = numericParam(token, 'I');
+  const j = numericParam(token, 'J');
+  const k = numericParam(token, 'K');
+  const perAxis = (value: number | undefined): number | undefined =>
+    value === undefined ? undefined : Math.abs(value) > 100 ? value / 1000 : value;
+
+  t.scale = {
+    x: perAxis(i) ?? factor ?? 1,
+    y: perAxis(j) ?? factor ?? 1,
+    z: perAxis(k) ?? factor ?? 1,
+  };
+
+  if (t.scale.x === 0 || t.scale.y === 0 || t.scale.z === 0) {
+    ctx.diagnostic({
+      severity: 'error',
+      code: 'SCALING_ZERO',
+      message: 'G51 olcek carpani 0; olcekleme yok sayildi.',
+    });
+    t.scale = { x: 1, y: 1, z: 1 };
+  }
+}
+
+/** G50 — olceklemeyi iptal eder. */
+function handleScalingOff(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  ctx.state.transform.scale = { x: 1, y: 1, z: 1 };
+}
+
+/**
+ * G51.1 — programlanabilir ayna. "G51.1 X0" X=0 duzlemine gore aynalar.
+ * Eslesen parca ciftleri (ERKEK/DISI, sag/sol) genelde boyle uretilir.
+ */
+function handleMirrorOn(token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  const { state } = ctx;
+  const t = state.transform;
+  const x = axisMm(token, 'X', state);
+  const y = axisMm(token, 'Y', state);
+  const z = axisMm(token, 'Z', state);
+  if (x !== undefined) { t.mirror.x = -1; t.mirrorCenter.x = x; }
+  if (y !== undefined) { t.mirror.y = -1; t.mirrorCenter.y = y; }
+  if (z !== undefined) { t.mirror.z = -1; t.mirrorCenter.z = z; }
+}
+
+/** G50.1 — aynayi iptal eder (eksen verilirse yalnizca o ekseni). */
+function handleMirrorOff(token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.transformVersion++;
+  const t = ctx.state.transform;
+  const hasAxis =
+    numericParam(token, 'X') !== undefined ||
+    numericParam(token, 'Y') !== undefined ||
+    numericParam(token, 'Z') !== undefined;
+  if (!hasAxis) {
+    t.mirror = { x: 1, y: 1, z: 1 };
+    return;
+  }
+  if (numericParam(token, 'X') !== undefined) t.mirror.x = 1;
+  if (numericParam(token, 'Y') !== undefined) t.mirror.y = 1;
+  if (numericParam(token, 'Z') !== undefined) t.mirror.z = 1;
+}
+
+/**
+ * G10 — ofset tablosuna yazar.
+ * Yalnizca yaricap tablosunu (L12 kesici / L13 asinma) okuyoruz: kesici
+ * telafisi bu degerlerle hesaplanir. Is sifiri yazan L2/L20 satirlari
+ * parcanin sekline degil yalnizca yerine etki ettigi icin yok sayilir.
+ */
+function handleOffsetTableWrite(token: GcodeToken, ctx: HandlerContext): void {
+  const { state } = ctx;
+  const l = numericParam(token, 'L');
+  if (l !== 12 && l !== 13) return;
+  const p = numericParam(token, 'P');
+  const r = numericParam(token, 'R');
+  if (p === undefined || r === undefined) return;
+  const radius = toMillimeters(r, state.unit);
+  if (l === 12) state.radiusOffsets.set(p, radius);
+  else state.radiusOffsets.set(p, (state.radiusOffsets.get(p) ?? 0) + radius);
+}
+
+/**
+ * G16 — kutupsal koordinat modu (X = yaricap, Y = aci).
+ *
+ * Desteklemiyoruz; ama SESSIZ kalmak tehlikelidir: koordinatlar kartezyen
+ * sanilirsa program bambaska bir yere cizilir. Bu yuzden acik uyari verilir.
+ */
+function handlePolarOn(_token: GcodeToken, ctx: HandlerContext): void {
+  if (ctx.state.polarReported) return;
+  ctx.state.polarReported = true;
+  ctx.diagnostic({
+    severity: 'warning',
+    code: 'POLAR_NOT_SUPPORTED',
+    message:
+      'G16 kutupsal koordinat modu desteklenmiyor; bu bolumdeki X/Y degerleri ' +
+      'yaricap/aci olarak degil, oldugu gibi cizildi. G15 ile kapatilan bolumler dogrudur.',
+  });
+}
+
 function handleAbsolutePositioning(_token: GcodeToken, ctx: HandlerContext): void {
   ctx.state.positioning = 'absolute';
   ctx.state.positioningDeclared = true;
@@ -471,7 +628,9 @@ function cannedCycle(command: string): CommandHandler {
     const dwell = token.params.P ?? prev?.dwell ?? 0;
 
     const needsPeck = command === 'G83' || command === 'G73';
-    if (needsPeck && q <= 0) {
+    // Kilavuz cevrimi: adim (Q) verilse bile gagalama yapmaz, tek pasoda iner.
+    const isTapping = command === 'G84' || command === 'G74';
+    if (needsPeck && !isTapping && q <= 0) {
       ctx.diagnostic({
         severity: 'warning',
         code: 'CANNED_CYCLE_NO_Q',
@@ -553,7 +712,7 @@ function cannedCycle(command: string): CommandHandler {
       step({ x, y, z: r }, true);
 
       // 3) Delme.
-      if (needsPeck && q > 0) {
+      if (needsPeck && !isTapping && q > 0) {
         let depth = r;
         while (depth > zBottom + 1e-9) {
           const next = Math.max(zBottom, depth - q);
@@ -575,12 +734,16 @@ function cannedCycle(command: string): CommandHandler {
       }
 
       // 4) Dipte bekleme (G82/G89). P saniye kabul edilir (LinuxCNC davranisi).
-      if ((command === 'G82' || command === 'G89') && dwell > 0) {
+      if ((command === 'G82' || command === 'G89' || command === 'G88') && dwell > 0) {
         state.dwellSeconds += dwell;
       }
 
       // 5) Geri cekilme. G85/G89 isleme feed'iyle cikar (raybalama/bore).
-      const feedOut = command === 'G85' || command === 'G89';
+      // Kilavuz (G84/G74) ve raybalama/bara (G85/G89/G76/G88) geri cikisi
+    // ISLEME ilerlemesiyle yapar; matkap cevrimleri hizli cikar.
+    const feedOut =
+      command === 'G85' || command === 'G89' || command === 'G84' ||
+      command === 'G74' || command === 'G88' || command === 'G76';
       step({ x, y, z: r }, !feedOut);
       if (state.retractMode === 'initial' && initialZ > r) {
         step({ x, y, z: initialZ }, true);
@@ -612,9 +775,14 @@ const IGNORED_COMMANDS = [
   'M7', 'M8', 'M9',
   // Is koordinat sistemleri ve telafi (geometriyi kabaca etkilemez)
   'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
-  'G40', 'G43', 'G44', 'G49', 'G61', 'G64',
-  // Ofset/telafi tablosu yazar; geometriyi dogrudan uretmez.
-  'G10', 'G92.1', 'G92.2', 'G92.3',
+  'G43', 'G44', 'G49', 'G60', 'G61', 'G63', 'G64', 'G9',
+  // Genisletilmis is sifirlari ve makro cagrilari: geometriyi dogrudan
+  // uretmezler (makro govdesi dosyada yoksa hesaplanamaz da).
+  'G54.1', 'G65', 'G66', 'G67',
+  // G29: referans noktasindan donus (CNC) / tabla taramasi (yazici).
+  // G31: olcum probu ile "skip" hareketi — probun nerede duracagi bilinemez.
+  'G29', 'G31', 'G15',
+  'G92.1', 'G92.2', 'G92.3',
   // Program akisi / alt program: index.ts akis kontrolunde ele alinir.
   'M98', 'M99',
 ] as const;
@@ -650,13 +818,26 @@ function handleMachineCoordinates(_token: GcodeToken, ctx: HandlerContext): void
   });
 }
 
+/**
+ * G41/G42 — kesici yaricap telafisi ACIK.
+ *
+ * Tezgah, programlanan hattin SOLUNA (G41) / SAGINA (G42) takim yaricapi
+ * kadar kayarak isler: programlanan cizgi parcanin KENARIDIR, takim merkezi
+ * degil. Telafi yok sayilirsa simulasyondan parca her kenarda bir takim
+ * yaricapi kadar farkli cikar. Burada yalnizca durum kaydedilir; yol
+ * kaydirmasi parse sonunda uygulanir (cutterComp.ts).
+ */
 function handleCutterComp(token: GcodeToken, ctx: HandlerContext): void {
+  const { state } = ctx;
   const which = token.commands.find((c) => c === 'G41' || c === 'G42') ?? 'G41';
-  ctx.diagnostic({
-    severity: 'info',
-    code: 'CUTTER_COMP_IGNORED',
-    message: `${which} kesici telafisi uygulanmadi; takim merkez hatti gosteriliyor.`,
-  });
+  state.cutterComp = which === 'G41' ? 'left' : 'right';
+  const d = numericParam(token, 'D');
+  if (d !== undefined) state.cutterCompD = d;
+}
+
+/** G40 — kesici telafisini kapatir. */
+function handleCutterCompOff(_token: GcodeToken, ctx: HandlerContext): void {
+  ctx.state.cutterComp = null;
 }
 
 export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
@@ -687,8 +868,18 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   M5: handleSpindleOff,
   M6: handleToolChangeM6,
   G53: handleMachineCoordinates,
+  G40: handleCutterCompOff,
   G41: handleCutterComp,
   G42: handleCutterComp,
+  G52: handleLocalOffset,
+  G68: handleRotationOn,
+  G69: handleRotationOff,
+  G51: handleScalingOn,
+  G50: handleScalingOff,
+  'G51.1': handleMirrorOn,
+  'G50.1': handleMirrorOff,
+  G10: handleOffsetTableWrite,
+  G16: handlePolarOn,
   G93: setFeedMode('inverseTime'),
   G94: setFeedMode('perMinute'),
   G95: setFeedMode('perRevolution'),
@@ -702,6 +893,13 @@ export const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   G85: cannedCycle('G85'),
   G86: cannedCycle('G86'),
   G89: cannedCycle('G89'),
+  // Kilavuz (dis cekme): ici ve disi ISLEME ilerlemesiyle gider.
+  G84: cannedCycle('G84'),
+  G74: cannedCycle('G74'),
+  // Hassas bara (fine boring) ve geri bara.
+  G76: cannedCycle('G76'),
+  G87: cannedCycle('G87'),
+  G88: cannedCycle('G88'),
   // Takim degisimi (T0..T9)
   ...Object.fromEntries(
     Array.from({ length: 10 }, (_, i) => [`T${i}`, handleToolChange as CommandHandler]),
@@ -733,6 +931,7 @@ export const MOTION_COMMANDS = new Set([
   // Delme cevrimleri de hareket uretir: ayni satirdaki G98/G99, G90/G91,
   // takim ve duzlem komutlari onlardan ONCE uygulanmalidir.
   'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
+  'G84', 'G74', 'G76', 'G87', 'G88',
 ]);
 
 /**
@@ -742,6 +941,7 @@ export const MOTION_COMMANDS = new Set([
 export const MODAL_REPEATABLE = new Set([
   'G0', 'G1', 'G2', 'G3',
   'G81', 'G82', 'G83', 'G73', 'G85', 'G86', 'G89',
+  'G84', 'G74', 'G76', 'G87', 'G88',
 ]);
 
 /**
@@ -761,5 +961,6 @@ export const MODAL_MOTION_COMPANIONS = new Set([
   'G40', 'G41', 'G42', 'G43', 'G44', 'G49',
   'G53', 'G54', 'G55', 'G56', 'G57', 'G58', 'G59',
   'G61', 'G64', 'G90', 'G91', 'G93', 'G94', 'G95', 'G98', 'G99',
+  'G54.1', 'G9', 'G60', 'G63',
   'M3', 'M4', 'M5', 'M7', 'M8', 'M9',
 ]);

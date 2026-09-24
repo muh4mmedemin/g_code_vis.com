@@ -27,6 +27,31 @@ export function ViewOptionsPanel() {
           </button>
         </div>
       </div>
+      <div className="view-options__row view-options__row--segmented">
+        <span>Islenmis yuzey:</span>
+        <div className="segmented">
+          <button
+            type="button"
+            className={
+              view.stockSurface === 'smooth' ? 'segmented__btn is-active' : 'segmented__btn'
+            }
+            onClick={() => setView({ stockSurface: 'smooth' })}
+            title="Kesilen yerler purüzsuz gosterilir (tezgahtan cikan parca gibi)"
+          >
+            Purüzsuz
+          </button>
+          <button
+            type="button"
+            className={
+              view.stockSurface === 'voxel' ? 'segmented__btn is-active' : 'segmented__btn'
+            }
+            onClick={() => setView({ stockSurface: 'voxel' })}
+            title="Simulasyon hucreleri oldugu gibi gosterilir"
+          >
+            Hucreli
+          </button>
+        </div>
+      </div>
       <label className="view-options__row">
         <input
           type="checkbox"

@@ -39,6 +39,104 @@ export interface CannedCycleState {
 }
 
 /**
+ * Programlanan koordinatlari GERCEK (is koordinat sistemindeki) noktaya
+ * ceviren modal donusum yigini.
+ *
+ * NEDEN: Fanuc/ISO kontrollerde parca, programin yazildigi yerden baska bir
+ * yerde/olcude/yonde islenebilir:
+ *   G52  yerel koordinat kaymasi (ayni parcayi baska bir noktada islemek)
+ *   G68  koordinat dondurme (ayni cebi 30 derece donuk acmak)
+ *   G51  olcekleme (ayni programi %98 kuculterek islemek)
+ *   G51.1 programlanabilir ayna (ERKEK parcadan DISI parca cikarmak)
+ * Bunlar yok sayilirsa program hatasiz "parse" edilir ama SIMULASYONDAN
+ * BASKA BIR PARCA cikar. Donusum tek noktada (emitMove) uygulanir; boylece
+ * yaylar, delme cevrimleri ve modal hareketler otomatik olarak kapsanir.
+ */
+export interface CoordTransform {
+  /** G52 yerel koordinat sistemi kaymasi (mm). */
+  offset: Vec3;
+  /** G51 olcek carpani (1 = kapali). Negatif deger ayna etkisi yapar. */
+  scale: Vec3;
+  /** G51'de verilen olcekleme merkezi (mm). */
+  scaleCenter: Vec3;
+  /** G51.1 ayna: eksen basina 1 veya -1. */
+  mirror: Vec3;
+  /** G51.1'de verilen ayna ekseni merkezi (mm). */
+  mirrorCenter: Vec3;
+  /** G68 dondurme acisi (derece, saat yonunun tersi). 0 = kapali. */
+  rotationDeg: number;
+  /** G68 dondurme merkezi (mm). */
+  rotationCenter: Vec3;
+  /** Dondurmenin yapildigi duzlem (G68 verildigi andaki G17/G18/G19). */
+  rotationPlane: ArcPlane;
+}
+
+export function createIdentityTransform(): CoordTransform {
+  return {
+    offset: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+    scaleCenter: { x: 0, y: 0, z: 0 },
+    mirror: { x: 1, y: 1, z: 1 },
+    mirrorCenter: { x: 0, y: 0, z: 0 },
+    rotationDeg: 0,
+    rotationCenter: { x: 0, y: 0, z: 0 },
+    rotationPlane: 'XY',
+  };
+}
+
+/** Donusum hicbir sey yapmiyor mu? (sicak yolda gereksiz hesabi atlamak icin) */
+export function isIdentityTransform(t: CoordTransform): boolean {
+  return (
+    t.offset.x === 0 && t.offset.y === 0 && t.offset.z === 0 &&
+    t.scale.x === 1 && t.scale.y === 1 && t.scale.z === 1 &&
+    t.mirror.x === 1 && t.mirror.y === 1 && t.mirror.z === 1 &&
+    t.rotationDeg === 0
+  );
+}
+
+/**
+ * Programlanan noktayi gercek konuma cevirir.
+ *
+ * Sira (Fanuc): ayna -> olcekleme -> dondurme -> yerel kayma (G52).
+ */
+export function applyTransform(t: CoordTransform, p: Vec3): Vec3 {
+  let { x, y, z } = p;
+
+  if (t.mirror.x < 0) x = 2 * t.mirrorCenter.x - x;
+  if (t.mirror.y < 0) y = 2 * t.mirrorCenter.y - y;
+  if (t.mirror.z < 0) z = 2 * t.mirrorCenter.z - z;
+
+  x = t.scaleCenter.x + (x - t.scaleCenter.x) * t.scale.x;
+  y = t.scaleCenter.y + (y - t.scaleCenter.y) * t.scale.y;
+  z = t.scaleCenter.z + (z - t.scaleCenter.z) * t.scale.z;
+
+  if (t.rotationDeg !== 0) {
+    const rad = (t.rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    // Dondurme aktif duzlemde yapilir; ucuncu eksen degismez.
+    const [ax, ay]: [number, number] =
+      t.rotationPlane === 'XY' ? [x - t.rotationCenter.x, y - t.rotationCenter.y]
+      : t.rotationPlane === 'XZ' ? [z - t.rotationCenter.z, x - t.rotationCenter.x]
+      : [y - t.rotationCenter.y, z - t.rotationCenter.z];
+    const rx = ax * cos - ay * sin;
+    const ry = ax * sin + ay * cos;
+    if (t.rotationPlane === 'XY') {
+      x = t.rotationCenter.x + rx;
+      y = t.rotationCenter.y + ry;
+    } else if (t.rotationPlane === 'XZ') {
+      z = t.rotationCenter.z + rx;
+      x = t.rotationCenter.x + ry;
+    } else {
+      y = t.rotationCenter.y + rx;
+      z = t.rotationCenter.z + ry;
+    }
+  }
+
+  return { x: x + t.offset.x, y: y + t.offset.y, z: z + t.offset.z };
+}
+
+/**
  * Parser'in modal (kalici) durumu. Her satir bu durumu okur ve/veya gunceller.
  * Yeni modal komut destegi eklemek = buraya alan eklemek + commands.ts altina
  * bir handler yazmak.
@@ -83,6 +181,30 @@ export interface MachineState {
   spindleRpm: number;
   /** Aktif delme cevrimi (G80 ile temizlenir). */
   cannedCycle: CannedCycleState | null;
+  /** G52/G68/G51/G51.1 donusum yigini (bkz. CoordTransform). */
+  transform: CoordTransform;
+  /**
+   * Donusum her degistiginde artan sayac.
+   *
+   * NEDEN: G52/G68/G51 degistiginde takim YERINDE durur ama programlanan ayni
+   * koordinat artik baska bir noktaya karsilik gelir. Bir sonraki hareket bu
+   * yuzden ESKI gercek noktadan baslamalidir; aksi halde yol sessizce
+   * sicrar. (G92 farklidir: orada koordinat sistemi degil, sayac degismez.)
+   */
+  transformVersion: number;
+  /** Son uretilen hareketin gercek bitis noktasi (donusum uygulanmis). */
+  lastRealPosition: Vec3 | null;
+  /** lastRealPosition uretilirken gecerli olan donusum surumu. */
+  lastRealVersion: number;
+  /**
+   * Aktif kesici yaricap telafisi: G41 (solda) / G42 (sagda) / null (G40).
+   * Yol kaydirmasi parse sonunda tek seferde uygulanir (bkz. cutterComp.ts).
+   */
+  cutterComp: 'left' | 'right' | null;
+  /** Aktif telafi numarasi (D sozcugu). */
+  cutterCompD: number | null;
+  /** G10 L12/L13 ile programda tanimlanan yaricap tablosu (D no -> mm). */
+  radiusOffsets: Map<number, number>;
   /**
    * Bu SATIR icin G53 (makine koordinati) gecerli mi?
    *
@@ -108,6 +230,8 @@ export interface MachineState {
   positioningDeclared: boolean;
   /** G53 uyarisi verildi mi? (satir basina degil, dosya basina bir kez) */
   machineCoordReported: boolean;
+  /** G16 (kutupsal) uyarisi verildi mi? */
+  polarReported: boolean;
   /** M3/M4 ile is mili calistirildi mi? */
   spindleOn: boolean;
   /**
@@ -138,11 +262,19 @@ export function createInitialState(): MachineState {
     feedMode: 'perMinute',
     spindleRpm: 0,
     cannedCycle: null,
+    transform: createIdentityTransform(),
+    transformVersion: 0,
+    lastRealPosition: null,
+    lastRealVersion: 0,
+    cutterComp: null,
+    cutterCompD: null,
+    radiusOffsets: new Map(),
     machineCoordBlock: false,
     maxZ: 0,
     unitsDeclared: false,
     positioningDeclared: false,
     machineCoordReported: false,
+    polarReported: false,
     spindleOn: false,
     spindleOffCutLine: null,
   };

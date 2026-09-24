@@ -1,7 +1,13 @@
 import type { GcodeStats, Layer, Move, ParseDiagnostic, ParseResult } from '@/core/types';
 import { LAYER_Z_EPSILON } from '@/core/constants';
 import { numericParam, tokenizeLine } from './tokenizer';
-import { createInitialState, toMillimeters, type MachineState } from './machineState';
+import {
+  applyTransform,
+  createInitialState,
+  isIdentityTransform,
+  toMillimeters,
+  type MachineState,
+} from './machineState';
 import {
   COMMAND_HANDLERS,
   MODAL_MOTION_COMPANIONS,
@@ -9,6 +15,7 @@ import {
   MOTION_COMMANDS,
   getHandler,
 } from './commands';
+import { applyCutterCompensation, type CompRun } from './cutterComp';
 import { buildToolpathBuffers } from '../buffers';
 import { computeStats } from '../stats';
 import {
@@ -26,6 +33,15 @@ export interface ParseOptions {
   forceDialect?: string;
   /** Uretilecek en fazla tani kaydi (bellek korumasi). */
   maxDiagnostics?: number;
+  /**
+   * Kesici yaricap telafisi (G41/G42) icin takim yaricapi (mm).
+   *
+   * Tezgahta bu deger ofset tablosundadir, dosyada degil; uygulama CNC
+   * panelinde secili takimin yaricapini buradan gecirir. Verilmezse (ve
+   * programda G10 L12 ile de tanimlanmamissa) telafi uygulanmaz, bunun
+   * yerine bir uyari uretilir.
+   */
+  toolRadius?: number;
 }
 
 /** Cok buyuk dosyalarda tani listesinin bellegi doldurmasini engeller. */
@@ -41,9 +57,12 @@ function clampRepeat(value: number): number {
   return Math.min(MAX_SUBPROGRAM_REPEAT, Math.floor(value));
 }
 
-/** "O1000" / "N10 O1000" satirindaki program numarasi, yoksa null. */
+/**
+ * "O1000", "N10 O1000" ya da ISO yazimi ":1000" satirindaki program
+ * numarasi; yoksa null.
+ */
 function parseProgramLabel(line: string): number | null {
-  const match = /^\s*(?:N\s*\d+\s*)?O\s*(\d+)/i.exec(line);
+  const match = /^\s*(?:\/\s*\d?\s*)?(?:N\s*\d+\s*)?[O:]\s*(\d+)/i.exec(line);
   if (!match) return null;
   const value = Number(match[1]);
   return Number.isFinite(value) ? value : null;
@@ -116,6 +135,9 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
 
   const dialect = resolveDialect(lines, options.forceDialect);
 
+  /** G41/G42 altinda uretilen hareket araliklari (bkz. cutterComp.ts). */
+  const compRuns: CompRun[] = [];
+
   /** A/B/C (doner eksen) sozcugu goren ilk satir — tani icin. */
   let rotaryLine: number | null = null;
   /** M30/M2 ile programin bittigi satir (varsa). */
@@ -123,9 +145,37 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
 
   const emitMove = (move: Move): void => {
     // Referans donusleri (G28/G30/G53) icin "guvenli yukseklik" olcutu:
-    // programin gercekte kullandigi en yuksek Z.
+    // programin gercekte kullandigi en yuksek Z. Olcut PROGRAM koordinatinda
+    // tutulur; state.position da oyle tasinir.
     if (move.to.z > state.maxZ) state.maxZ = move.to.z;
     if (move.from.z > state.maxZ) state.maxZ = move.from.z;
+
+    // G52/G68/G51/G51.1 donusumu TEK noktada uygulanir: boylece yaylar,
+    // delme cevrimleri ve modal hareketler ayrica ele alinmak zorunda kalmaz.
+    const transformed = !isIdentityTransform(state.transform) || state.transformVersion > 0;
+    if (transformed) {
+      const to = applyTransform(state.transform, move.to);
+      // Donusum bu hareketten once degistiyse takim hala ESKI gercek
+      // noktadadir; hareket oradan baslar.
+      const from =
+        state.lastRealPosition && state.lastRealVersion !== state.transformVersion
+          ? state.lastRealPosition
+          : applyTransform(state.transform, move.from);
+      const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+      // Olcekleme mesafeyi degistirir; sure de ayni oranda degismelidir.
+      if (move.distance > 0) move.duration *= distance / move.distance;
+      move.from = from;
+      move.to = to;
+      move.distance = distance;
+      state.lastRealPosition = to;
+      state.lastRealVersion = state.transformVersion;
+    }
+
+    // Hicbir sey yapmayan hareket ("G1 F600", ayni noktanin tekrari): CAM
+    // ciktilarinda sikca gecer; segment uretmek yalnizca hareket sayisini ve
+    // render yukunu sisirir. Home hareketleri (G28) bilincli olarak korunur.
+    if (move.distance === 0 && move.e === 0 && move.kind !== 'home') return;
+
 
     // Is mili durumu hareketin YAPILDIGI anda onemlidir (program sonundaki
     // M5 sonradan bayragi kapatir), bu yuzden burada yakalanir.
@@ -138,6 +188,25 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
       state.spindleOffCutLine = move.lineIndex;
     }
     moves.push(move);
+
+    // Kesici telafisi parse SONUNDA, tam yol bilindiginde uygulanir (kose
+    // birlesimleri icin bir sonraki hareketin yonu gerekir). Burada yalnizca
+    // "su hareketler G41/G42 altinda uretildi" araliklari biriktirilir.
+    const index = moves.length - 1;
+    if (state.cutterComp) {
+      const last = compRuns[compRuns.length - 1];
+      if (last && last.end === index && last.side === state.cutterComp && last.d === state.cutterCompD) {
+        last.end = index + 1;
+      } else {
+        compRuns.push({
+          side: state.cutterComp,
+          d: state.cutterCompD,
+          start: index,
+          end: index + 1,
+          lineIndex: move.lineIndex,
+        });
+      }
+    }
   };
 
   const totalLines = lines.length;
@@ -175,6 +244,13 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
       if (token.comment && dialect && depth === 0) {
         const hint = dialect.parseLayerHint(token.comment);
         if (hint) layerHints.push({ lineIndex: i, z: hint.z });
+      }
+
+      // Telafi acikken yazilan D, ofset numarasini degistirir (tezgahta yeni
+      // yaricap o satirdan itibaren gecerlidir).
+      if (state.cutterComp !== null) {
+        const d = numericParam(token, 'D');
+        if (d !== undefined) state.cutterCompD = d;
       }
 
       if (token.params.A !== undefined || token.params.B !== undefined || token.params.C !== undefined) {
@@ -358,18 +434,28 @@ export function parseGcode(source: string, options: ParseOptions = {}): ParseRes
     });
   }
 
-  reclassifyCncMoves(moves);
-  checkSemantics(moves, state, diagnostics);
+  // Kesici telafisi (G41/G42): programlanan hat parcanin kenaridir, takim
+  // merkezi degil. Kaydirma butun yol bilindikten sonra uygulanir.
+  // Dis kose yaylari yeni hareketler ekleyebildigi icin yeni bir dizi doner.
+  const finalMoves = applyCutterCompensation(
+    moves,
+    compRuns,
+    { defaultRadius: options.toolRadius, radiusOffsets: state.radiusOffsets },
+    diagnostics,
+  );
+
+  reclassifyCncMoves(finalMoves);
+  checkSemantics(finalMoves, state, diagnostics);
   diagnostics.sort((a, b) => a.lineIndex - b.lineIndex);
 
-  const layers = assignLayers(moves, layerHints);
-  const stats: GcodeStats = computeStats(moves, layers, state.dwellSeconds);
-  const buffers = buildToolpathBuffers(moves);
+  const layers = assignLayers(finalMoves, layerHints);
+  const stats: GcodeStats = computeStats(finalMoves, layers, state.dwellSeconds);
+  const buffers = buildToolpathBuffers(finalMoves);
 
   options.onProgress?.(1);
 
   return {
-    moves,
+    moves: finalMoves,
     layers,
     stats,
     diagnostics,
@@ -538,7 +624,14 @@ function checkSemantics(moves: Move[], state: MachineState, out: ParseDiagnostic
 
     let firstUnsafe: Move | null = null;
     let unsafeCount = 0;
-    for (const m of moves) {
+    // Ilk kesimden ONCEKI hizli hareketler degerlendirilmez: takim o asamada
+    // henuz malzemeye yaklasmamistir ve programin baslangic konumu (tezgahta
+    // takim degisim noktasi) dosyada yazmadigi icin varsayilan (0,0,0) yanlis
+    // alarm uretirdi.
+    const firstCutIndex = firstCut ? moves.indexOf(firstCut) : -1;
+    for (let i = firstCutIndex + 1; i < moves.length; i++) {
+      const m = moves[i];
+      if (!m) continue;
       if (!m.rapid || m.kind === 'home') continue;
       const movesInXY = Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y) > 0.01;
       if (!movesInXY) continue;

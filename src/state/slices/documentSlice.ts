@@ -54,9 +54,18 @@ export const createDocumentSlice: StateCreator<AppStore, [], [], DocumentSlice> 
 
     set({ parseStatus: 'parsing', parseProgress: 0, parseError: null });
 
-    const handle = parseInWorker(source, (ratio) => {
-      set({ parseProgress: ratio });
-    });
+    // Kesici telafisi (G41/G42) tezgahta ofset tablosundan okunur; burada
+    // kullanicinin CNC panelinde tanimladigi takim capi o rolu ustlenir.
+    // Boylece G41/G42 iceren programlarda parca gercek olcusunde cikar.
+    const toolRadius = get().tool.diameter > 0 ? get().tool.diameter / 2 : undefined;
+
+    const handle = parseInWorker(
+      source,
+      (ratio) => {
+        set({ parseProgress: ratio });
+      },
+      { toolRadius },
+    );
     activeParse = handle;
 
     try {

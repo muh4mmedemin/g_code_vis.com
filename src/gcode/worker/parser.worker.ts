@@ -18,6 +18,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     const result = parseGcode(data.source, {
       forceDialect: data.forceDialect,
       onProgress: (ratio) => reply({ type: 'progress', id: data.id, ratio }),
+      toolRadius: data.toolRadius,
     });
     reply({ type: 'done', id: data.id, result }, collectTransferables(result.buffers));
   } catch (err) {

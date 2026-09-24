@@ -713,3 +713,100 @@ describe('parseGcode — CAM (N satir numarali, modal) programlari', () => {
     expect(r.diagnostics.some((d) => d.code === 'ZERO_FEEDRATE')).toBe(false);
   });
 });
+
+describe('parseGcode — atolye programlarinda sik gecen komutlar', () => {
+  it('Mastercam tarzi basligi (etiket satiri + G40/G17/G80/G90) sorunsuz okur', () => {
+    const r = parseGcode(
+      g(
+        'N1 ERKEK',
+        'N3 G40 G17 G80 G90',
+        'N5 G91 G28 Z0.0',
+        'N7 T1 M6',
+        'N9 S5000 M3',
+        'N11 G0 G90 G54 X49.5 Y-32.997',
+        'N13 G0 G43 Z13. H1',
+        'N15 G0 Z6.',
+        'N17 G1 Z0.0 F3300. D1',
+        'N19 G1 X70.997',
+        'N21 M30',
+      ),
+    );
+    // "ERKEK" kod degil, parca adidir: harfleri parametre sayilmamali.
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+    expect(r.diagnostics.some((d) => d.severity === 'error')).toBe(false);
+    // G43 satiri guvenli yukseklige cikar, son hareket X70.997'ye kesim yapar.
+    expect(r.moves.some((m) => m.to.z === 13)).toBe(true);
+    const last = r.moves[r.moves.length - 1];
+    expect(last?.to.x).toBeCloseTo(70.997);
+    expect(r.stats.bounds.max.x).toBeCloseTo(70.997);
+  });
+
+  it('blok silme (/) isaretli satirlari calistirir', () => {
+    const r = parseGcode(g('G21 G90', 'G1 X10 F500', '/N20 G1 X20', 'G1 X30'));
+    expect(r.moves).toHaveLength(3);
+    expect(r.moves[2]?.to.x).toBe(30);
+  });
+
+  it('G52 yerel koordinat kaymasini uygular', () => {
+    const r = parseGcode(g('G21 G90', 'G52 X50 Y10', 'G1 X10 Y0 F500', 'G52 X0 Y0', 'G1 X10 Y0'));
+    expect(r.moves[0]?.to).toEqual({ x: 60, y: 10, z: 0 });
+    expect(r.moves[1]?.to).toEqual({ x: 10, y: 0, z: 0 });
+  });
+
+  it('G68/G69 ile koordinat dondurmeyi uygular', () => {
+    const r = parseGcode(g('G21 G90', 'G68 X0 Y0 R90', 'G1 X10 Y0 F500', 'G69', 'G1 X10 Y0'));
+    // 90 derece donus: (10,0) -> (0,10)
+    expect(r.moves[0]?.to.x).toBeCloseTo(0, 6);
+    expect(r.moves[0]?.to.y).toBeCloseTo(10, 6);
+    expect(r.moves[1]?.to.x).toBeCloseTo(10, 6);
+  });
+
+  it('G51/G50 ile olceklemeyi uygular (P binde cinsinden)', () => {
+    const r = parseGcode(g('G21 G90', 'G51 X0 Y0 Z0 P500', 'G1 X10 Y10 F500', 'G50', 'G1 X10 Y10'));
+    expect(r.moves[0]?.to).toEqual({ x: 5, y: 5, z: 0 });
+    expect(r.moves[1]?.to).toEqual({ x: 10, y: 10, z: 0 });
+  });
+
+  it('G51.1 ile aynalar, G50.1 ile iptal eder', () => {
+    const r = parseGcode(g('G21 G90', 'G51.1 X0', 'G1 X10 Y5 F500', 'G50.1', 'G1 X10 Y5'));
+    expect(r.moves[0]?.to).toEqual({ x: -10, y: 5, z: 0 });
+    expect(r.moves[1]?.to).toEqual({ x: 10, y: 5, z: 0 });
+  });
+
+  it('G84 kilavuz cevrimi deligi isler ve ISLEME ilerlemesiyle cikar', () => {
+    const r = parseGcode(
+      g('G21 G90', 'M3 S500', 'G0 X0 Y0 Z10', 'G84 X0 Y0 Z-10 R2 F500', 'G80', 'M30'),
+    );
+    const cycle = r.moves.filter((m) => m.lineIndex === 3);
+    expect(cycle.some((m) => m.to.z <= -10 + 1e-9)).toBe(true);
+    // Kilavuz dipten ISLEME ilerlemesiyle geri cikar (hizli degil);
+    // R duzleminden baslangic duzlemine donus yine hizlidir.
+    const out = cycle.find((m) => m.from.z <= -10 + 1e-9 && m.to.z > m.from.z);
+    expect(out?.rapid).toBe(false);
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+  });
+
+  it('G76/G87/G88/G74 cevrimleri bilinmeyen komut saymaz', () => {
+    for (const code of ['G76', 'G87', 'G88', 'G74']) {
+      const r = parseGcode(
+        g('G21 G90', 'M3 S500', 'G0 X0 Y0 Z10', `${code} X0 Y0 Z-5 R2 Q1 F200`, 'G80', 'M30'),
+      );
+      expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND'), code).toBe(false);
+      expect(r.moves.some((m) => m.to.z <= -5 + 1e-9), code).toBe(true);
+    }
+  });
+
+  it('G54.1 ve makro cagrilari (G65/G66/G67) uyari uretmez', () => {
+    const r = parseGcode(
+      g('G21 G90', 'G54.1 P3', 'G65 P9010 A1. B2.', 'G67', 'G1 X10 F200', 'M30'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'UNKNOWN_COMMAND')).toBe(false);
+  });
+
+  it('ilk kesimden onceki yaklasma hareketleri icin carpma uyarisi vermez', () => {
+    const r = parseGcode(
+      g('G90', 'G21', 'M3 S1000', 'G0 X49.5 Y-32.997', 'G1 Z0 F300', 'G1 X70.997', 'M30'),
+    );
+    expect(r.diagnostics.some((d) => d.code === 'RAPID_INSIDE_STOCK')).toBe(false);
+  });
+});
