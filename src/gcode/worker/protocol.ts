@@ -5,7 +5,14 @@ import type { ParseResult } from '@/core/types';
  * Iki taraf da SADECE bu tipleri kullanir.
  */
 
-export type WorkerRequest = { type: 'parse'; id: number; source: string; forceDialect?: string };
+export type WorkerRequest = {
+  type: 'parse';
+  id: number;
+  source: string;
+  forceDialect?: string;
+  /** Kesici yaricap telafisi (G41/G42) icin secili takimin yaricapi (mm). */
+  toolRadius?: number;
+};
 
 export type WorkerResponse =
   | { type: 'progress'; id: number; ratio: number }

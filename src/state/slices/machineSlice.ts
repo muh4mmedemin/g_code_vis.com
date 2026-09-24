@@ -17,7 +17,7 @@ export interface MachineSlice {
   setVoxelResolution(n: number): void;
 }
 
-export const createMachineSlice: StateCreator<AppStore, [], [], MachineSlice> = (set) => ({
+export const createMachineSlice: StateCreator<AppStore, [], [], MachineSlice> = (set, get) => ({
   mode: 'print',
   stock: { ...DEFAULT_STOCK },
   tool: { ...DEFAULT_TOOL },
@@ -32,7 +32,17 @@ export const createMachineSlice: StateCreator<AppStore, [], [], MachineSlice> = 
   },
 
   setTool(patch) {
+    const previousDiameter = get().tool.diameter;
     set((state) => ({ tool: { ...state.tool, ...patch } }));
+
+    // Kesici yaricap telafisi (G41/G42) takim capina baglidir: tezgahta bu
+    // deger ofset tablosundan gelir, bizde CNC panelinden. Cap degistiginde
+    // telafili programin yolu da degismelidir, yoksa ekranda eski capa gore
+    // hesaplanmis bir parca kalir.
+    if (patch.diameter !== undefined && patch.diameter !== previousDiameter) {
+      const source = get().source;
+      if (/\bG\s*0*4[12]\b/i.test(source)) void get().reparse();
+    }
   },
 
   setVoxelResolution(n) {
