@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand';
 import type { ParseResult } from '@/core/types';
 import { parseInWorker } from '@/gcode/worker/client';
+import { readNcFile } from '@/gcode/readNcFile';
 import type { AppStore } from '../store';
 
 /** Yuklenen dosya + editordeki metin + parse sonucu. */
@@ -34,7 +35,21 @@ export const createDocumentSlice: StateCreator<AppStore, [], [], DocumentSlice> 
   parseError: null,
 
   async loadFile(file) {
-    const text = await file.text();
+    // Uzanti degil ICERIK belirleyicidir: ".dat"/".prt" olarak duran ISO
+    // programlari okunur, CAD modeli gibi ikili dosyalar ise parse edilmeye
+    // calisilmadan aciklanir (bkz. readNcFile).
+    const { text, error } = await readNcFile(file);
+    if (text === null) {
+      set({
+        fileName: file.name,
+        source: '',
+        parseResult: null,
+        parseStatus: 'error',
+        parseProgress: 0,
+        parseError: error,
+      });
+      return;
+    }
     set({ fileName: file.name, source: text });
     await get().reparse();
   },
