@@ -36,12 +36,25 @@ export class VoxelGrid {
   readonly min: Vec3;
   /** Yeniden mesh'lenmesi gereken chunk indeksleri. */
   readonly dirtyChunks = new Set<number>();
+  /**
+   * Her XY kolonunda islenmis yuzeyin GERCEK Z'si (mm).
+   *
+   * NEDEN AYRI TUTULUYOR: Kesim modeli 2.5D'dir — takim ucunun uzerindeki her
+   * sey kalkar (bkz. carver.ts). Dolayisiyla islenmis blok, matematiksel
+   * olarak bir yukseklik alanidir. Voxel dizisi bu yuksekligi hucre boyuna
+   * yuvarlar; burada ise uc gercekte nereye indiyse o deger (ara degerler
+   * dahil) saklanir. "Purüzsuz yuzey" modu bu alandan mesh uretir ve kesilen
+   * yerleri basamaksiz gosterir.
+   */
+  readonly surface: Float32Array;
 
   constructor(dims: GridDims, cellSize: number, min: Vec3) {
     this.dims = dims;
     this.cellSize = cellSize;
     this.min = min;
     this.data = new Uint8Array(dims.nx * dims.ny * dims.nz);
+    this.surface = new Float32Array(dims.nx * dims.ny);
+    this.surface.fill(this.topZ);
     this.chunkDims = {
       nx: Math.ceil(dims.nx / CHUNK_SIZE),
       ny: Math.ceil(dims.ny / CHUNK_SIZE),
@@ -90,6 +103,35 @@ export class VoxelGrid {
     return this.data.length;
   }
 
+  /** Islenmemis blogun ust yuzeyi (mm). */
+  get topZ(): number {
+    return this.min.z + this.dims.nz * this.cellSize;
+  }
+
+  /** Blogun alt yuzeyi (mm). */
+  get bottomZ(): number {
+    return this.min.z;
+  }
+
+  /** Kolonun islenmis yuzey Z'si. */
+  surfaceAt(i: number, j: number): number {
+    return this.surface[i + this.dims.nx * j] ?? this.topZ;
+  }
+
+  /**
+   * Kolonun yuzeyini indirir (yalnizca asagi dogru; malzeme geri gelmez).
+   * @returns yuzey gercekten degistiyse true
+   */
+  lowerSurface(i: number, j: number, z: number): boolean {
+    if (i < 0 || j < 0 || i >= this.dims.nx || j >= this.dims.ny) return false;
+    const index = i + this.dims.nx * j;
+    const clamped = z < this.bottomZ ? this.bottomZ : z;
+    const current = this.surface[index] ?? this.topZ;
+    if (clamped >= current) return false;
+    this.surface[index] = clamped;
+    return true;
+  }
+
   index(i: number, j: number, k: number): number {
     return i + this.dims.nx * (j + this.dims.ny * k);
   }
@@ -108,6 +150,7 @@ export class VoxelGrid {
   /** Tum hucreleri dolu yapar (testereden cikmis ham blok). */
   fill(): void {
     this.data.fill(1);
+    this.surface.fill(this.topZ);
     this.markAllDirty();
   }
 

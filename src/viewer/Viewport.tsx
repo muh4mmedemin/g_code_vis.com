@@ -152,8 +152,16 @@ export function Viewport() {
       }
     });
 
+    // Islenmis blogun yuzey gosterimi (purüzsuz / hucreli).
+    const unsubSurface = useStore.subscribe((state, prev) => {
+      if (state.view.stockSurface !== prev.view.stockSurface) {
+        stockLayer.setSurfaceMode(state.view.stockSurface);
+      }
+    });
+
     // Baslangic durumunu uygula (ilk yuklemede zaten veri varsa).
     manager.broadcastViewSettings(useStore.getState().view);
+    stockLayer.setSurfaceMode(useStore.getState().view.stockSurface);
     stockLayer.setVisible(useStore.getState().mode === 'cnc');
     solidPrintLayer.setMachineMode(useStore.getState().mode);
     toolHeadLayer.setMachineMode(useStore.getState().mode);
@@ -226,6 +234,7 @@ export function Viewport() {
       unsubVolume();
       unsubProgress();
       unsubStock();
+      unsubSurface();
       unsubMeasure();
       manager.canvas.removeEventListener('pointerdown', onPointerDown);
       manager.canvas.removeEventListener('pointerup', onPointerUp);
