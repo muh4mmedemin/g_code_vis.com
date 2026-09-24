@@ -19,18 +19,21 @@ export function FileDropZone() {
 
   const handleFile = (file: File | undefined) => {
     if (!file) return;
-    const isAccepted = ACCEPTED_EXTENSIONS.some((ext) =>
+    // Uzantiya gore REDDETMIYORUZ: tezgah dosyalari atolyede ".dat", ".prt"
+    // gibi akla gelmeyen uzantilarla durur ve icerikleri gayet gecerli
+    // ISO G-code'dur. Dosyanin okunabilir olup olmadigina icerigine bakarak
+    // karar verilir (documentSlice.loadFile); burada yalnizca bilgi verilir.
+    const isKnownExtension = ACCEPTED_EXTENSIONS.some((ext) =>
       file.name.toLowerCase().endsWith(ext),
     );
-    if (!isAccepted) {
-      setWarning(`Desteklenmeyen uzanti. Beklenen: ${acceptAttr}`);
-      return;
-    }
-    if (file.size > LARGE_FILE_WARNING_BYTES) {
+    if (!isKnownExtension) {
+      setWarning(`Taninmayan uzanti — dosya yine de okunmaya calisiliyor.`);
+    } else if (file.size > LARGE_FILE_WARNING_BYTES) {
       setWarning(`Buyuk dosya (${formatBytes(file.size)}) — parse suresi uzayabilir.`);
     } else {
       setWarning(null);
     }
+
     void loadFile(file);
   };
 

@@ -158,7 +158,22 @@ export const SOLID_EXTRUSION_WIDTH = 0.45;
 export const SOLID_LAYER_HEIGHT_FALLBACK = 0.2;
 
 /** Kabul edilen dosya uzantilari. */
-export const ACCEPTED_EXTENSIONS = ['.gcode', '.gco', '.g', '.nc', '.ngc', '.tap'] as const;
+/**
+ * Dosya seciciye onerilen uzantilar.
+ *
+ * ZORLAYICI DEGILDIR: NC programinin uzantisi tezgahtan tezgaha degisir
+ * (ayni atolyede ".dat" ve ".prt" olarak duran ISO programlari yaygindir).
+ * Uzantiya bakip reddetmek, dosyanin ICERIGI gayet gecerli G-code olsa bile
+ * kullaniciyi kilitler; bu yuzden karar icerige gore verilir (bkz.
+ * documentSlice.loadFile).
+ */
+export const ACCEPTED_EXTENSIONS = [
+  '.gcode', '.gco', '.g', '.nc', '.ngc', '.tap',
+  // Atolyede sik gorulen diger uzantilar (Fanuc/Siemens/Heidenhain/EDM ve
+  // post-processor'a gore degisen adlandirmalar):
+  '.dat', '.prt', '.txt', '.cnc', '.iso', '.eia', '.min', '.mpf', '.spf',
+  '.pgm', '.anc', '.ncf', '.h', '.mcd', '.fnc', '.din',
+] as const;
 
 /** Bu boyutun ustunde kullaniciya "uzun surebilir" uyarisi gosterilir (byte). */
 export const LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024;

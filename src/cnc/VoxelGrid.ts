@@ -19,6 +19,19 @@ export const CHUNK_SIZE = 32;
 /** Bellek/performans tavani. 20M hucre ~ 20MB. */
 const MAX_CELLS = 20_000_000;
 
+/**
+ * Purüzsuz yuzey alaninin (2B) en fazla kolon sayisi.
+ *
+ * Yuzey alani voxel grid'inden DAHA INCE tutulur: voxel hucresi 3B oldugu
+ * icin cozunurlugu artirmak bellegi kupsel buyutur, oysa yuzey yalnizca 2B
+ * bir yukseklik alanidir. Kesim kenarlarinin XY'de basamakli gorunmesinin
+ * sebebi de bu yanal cozunurluktur; ince alan bunu duzeltir.
+ */
+const MAX_SURFACE_COLUMNS = 400_000;
+
+/** Yuzey alaninin voxel grid'ine gore en fazla kac kat ince olabilecegi. */
+const MAX_SURFACE_FACTOR = 4;
+
 export interface GridDims {
   nx: number;
   ny: number;
@@ -47,13 +60,30 @@ export class VoxelGrid {
    * yerleri basamaksiz gosterir.
    */
   readonly surface: Float32Array;
+  /** Yuzey alaninin voxel grid'ine gore inceligi (1 = ayni). */
+  readonly surfaceFactor: number;
+  /** Yuzey alaninin XY hucre sayisi. */
+  readonly surfaceDims: { nx: number; ny: number };
+  /** Yuzey alaninin hucre kenari (mm). */
+  readonly surfaceCellSize: number;
 
   constructor(dims: GridDims, cellSize: number, min: Vec3) {
     this.dims = dims;
     this.cellSize = cellSize;
     this.min = min;
     this.data = new Uint8Array(dims.nx * dims.ny * dims.nz);
-    this.surface = new Float32Array(dims.nx * dims.ny);
+
+    const factor = Math.max(
+      1,
+      Math.min(
+        MAX_SURFACE_FACTOR,
+        Math.floor(Math.sqrt(MAX_SURFACE_COLUMNS / Math.max(1, dims.nx * dims.ny))),
+      ),
+    );
+    this.surfaceFactor = factor;
+    this.surfaceDims = { nx: dims.nx * factor, ny: dims.ny * factor };
+    this.surfaceCellSize = cellSize / factor;
+    this.surface = new Float32Array(this.surfaceDims.nx * this.surfaceDims.ny);
     this.surface.fill(this.topZ);
     this.chunkDims = {
       nx: Math.ceil(dims.nx / CHUNK_SIZE),
@@ -113,18 +143,26 @@ export class VoxelGrid {
     return this.min.z;
   }
 
-  /** Kolonun islenmis yuzey Z'si. */
-  surfaceAt(i: number, j: number): number {
-    return this.surface[i + this.dims.nx * j] ?? this.topZ;
+  /** Yuzey alanindaki kolonun islenmis Z'si (INCE izgara indeksleri). */
+  surfaceAt(si: number, sj: number): number {
+    return this.surface[si + this.surfaceDims.nx * sj] ?? this.topZ;
+  }
+
+  /** Dunya XY'sini iceren yuzey kolonu (sinir disi olabilir). */
+  worldToSurfaceCell(x: number, y: number): [number, number] {
+    return [
+      Math.floor((x - this.min.x) / this.surfaceCellSize),
+      Math.floor((y - this.min.y) / this.surfaceCellSize),
+    ];
   }
 
   /**
    * Kolonun yuzeyini indirir (yalnizca asagi dogru; malzeme geri gelmez).
    * @returns yuzey gercekten degistiyse true
    */
-  lowerSurface(i: number, j: number, z: number): boolean {
-    if (i < 0 || j < 0 || i >= this.dims.nx || j >= this.dims.ny) return false;
-    const index = i + this.dims.nx * j;
+  lowerSurface(si: number, sj: number, z: number): boolean {
+    if (si < 0 || sj < 0 || si >= this.surfaceDims.nx || sj >= this.surfaceDims.ny) return false;
+    const index = si + this.surfaceDims.nx * sj;
     const clamped = z < this.bottomZ ? this.bottomZ : z;
     const current = this.surface[index] ?? this.topZ;
     if (clamped >= current) return false;
